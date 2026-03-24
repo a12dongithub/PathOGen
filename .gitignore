@@ -1,0 +1,15 @@
+# Ignore everything by default
+*
+
+# Do NOT ignore directories (so git can traverse to find allowed files)
+!*/
+
+# Explicitly allow python and shell scripts, and gitignore
+!*.py
+!*.sh
+!.gitignore
+
+# Explicitly ignore common Python/OS junk, just in case
+__pycache__/
+*.pyc
+.DS_Store
