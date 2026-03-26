@@ -101,7 +101,7 @@ accelerate launch --multi_gpu --num_processes=8 train_pathogen.py \
     --train_batch_size=6 \
     --gradient_accumulation_steps=2 \
     --gradient_checkpointing \
-    --max_train_steps=120000 \
+    --max_train_steps=40000 \
     --checkpointing_steps=5000 \
     --use_8bit_adam \
     --allow_tf32 \
