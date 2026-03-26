@@ -1156,11 +1156,12 @@ def main(args):
                     # Reconstruct the pipeline using the current checkpoint state
                     temp_unet = accelerator.unwrap_model(unet)
                     temp_controlnet = accelerator.unwrap_model(controlnet)
+                    temp_vae = accelerator.unwrap_model(vae)
                         
                     pipeline = StableDiffusionControlNetPipeline.from_pretrained(
                         args.pretrained_model_name_or_path,
                         text_encoder=text_encoder,
-                        vae=vae,
+                        vae=temp_vae,
                         unet=temp_unet,
                         controlnet=temp_controlnet,
                         revision=args.revision,
