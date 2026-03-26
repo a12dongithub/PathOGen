@@ -11,13 +11,14 @@ echo "=========================================================="
 eval "$(conda shell.bash hook)"
 
 # ── 1. Environment Setup ──
-echo "[1/6] Creating conda environment..."
-if conda info --envs | grep -q 'pathogen'; then
-    echo "Environment 'pathogen' already exists. Skipping creation."
+ENV_PREFIX="/home/samarth.singhal/pathogen"
+echo "[1/6] Creating conda environment at $ENV_PREFIX ..."
+if [ -d "$ENV_PREFIX" ] && [ -f "$ENV_PREFIX/bin/python" ]; then
+    echo "Environment at $ENV_PREFIX already exists. Skipping creation."
 else
-    conda create -n pathogen python=3.10 -y
+    conda create --prefix "$ENV_PREFIX" python=3.10 -y
 fi
-conda activate pathogen
+conda activate "$ENV_PREFIX"
 
 echo "[2/6] Installing dependencies..."
 # Use PyTorch nightly with CUDA 12.8 for native Blackwell (sm_120) support
