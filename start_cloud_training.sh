@@ -58,7 +58,8 @@ sed -i 's/check_min_version("0.37.0.dev0")/# check_min_version("0.37.0.dev0")/g'
 # Text prompt is constant ("he") for ALL samples — the model learns
 # unconditional H&E generation, NOT text-conditioned generation.
 # Use all 8 V100 GPUs
-export CUDA_VISIBLE_DEVICES="0,1,2,3,4,5,6,7"
+# export CUDA_VISIBLE_DEVICES="0,1,2,3,4,5,6,7"
+export CUDA_VISIBLE_DEVICES="0"
 
 echo "[4/6] Phase 1: Domain adaptation (unconditional H&E generation)..."
 # Phase 1 is already complete — uncomment to re-run if needed
