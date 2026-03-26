@@ -34,12 +34,12 @@ accelerate config default
 # ── 2. Data Preprocessing (precomputed, not during training) ──
 echo "[3/6] Precomputing morphology features + spatial maps..."
 if [ ! -f "./data/morphology_features/morphology_stats.parquet" ]; then
-    python generate_spatial_maps.py --data_dir=./data --n_jobs=128
+    python generate_spatial_maps.py --data_dir=./data --n_jobs=32
     python generate_morphology_features.py \
         --dataset_path=./data \
         --data_dir=./data \
         --output=./data/morphology_features/morphology_stats.parquet \
-        --n_jobs=128
+        --n_jobs=32
 else
     echo "Morphology features already exist. Skipping."
 fi
@@ -88,7 +88,7 @@ echo "[4/6] Phase 1: Domain adaptation (unconditional H&E generation)..."
 #     --output_dir='./checkpoints/phase1_domain_adapt' \
 #     --use_8bit_adam \
 #     --allow_tf32 \
-#     --dataloader_num_workers=128 \
+#     --dataloader_num_workers=32 \
 #     --report_to='tensorboard' \
 #     --tracker_project_name='pathogen-phase1'
 
@@ -114,7 +114,7 @@ accelerate launch --multi_gpu --num_processes=7 train_pathogen.py \
     --resume_from_checkpoint='./checkpoints/phase2_controlnet/checkpoint-10000' \
     --use_8bit_adam \
     --allow_tf32 \
-    --dataloader_num_workers=128 \
+    --dataloader_num_workers=32 \
     --report_to='tensorboard' \
     --tracker_project_name='pathogen-phase2'
 
