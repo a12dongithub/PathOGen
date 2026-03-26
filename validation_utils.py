@@ -100,14 +100,13 @@ def run_phase1_validation(accelerator, pipeline, args, global_step):
     
 def run_phase2_validation(accelerator, pipeline, args, global_step):
     """
-    Runs conditional ControlNet+FiLM generation for Phase 2, computes FID, and creates visual comparison grids.
+    Runs conditional ControlNet generation for Phase 2 (no FiLM), computes FID, and creates visual comparison grids.
     """
     accelerator.print(f"*** Running Phase 2 Validation at Step {global_step} ***")
     
     val_dir = Path(args.train_data_dir).parent / "data_val"
     val_tiles_dir = val_dir / "tiles"
     val_spatial_dir = val_dir / "spatial_maps"
-    val_morph_path = val_dir / "morphology_stats.parquet"
     
     if not val_tiles_dir.exists():
         accelerator.print(f"Skipping validation: {val_tiles_dir} not found.")
@@ -115,22 +114,14 @@ def run_phase2_validation(accelerator, pipeline, args, global_step):
         
     real_images = []
     spatial_maps = []
-    morphologies = []
     stems = []
     
-    if not val_morph_path.exists():
-        accelerator.print(f"Skipping validation: {val_morph_path} not found.")
-        return
-        
-    import pandas as pd
-    morph_df = pd.read_parquet(val_morph_path)
-    
-    # Load evaluation batch
+    # Load evaluation batch (spatial maps only, no morphology)
     for file in sorted(val_tiles_dir.glob("*.png")):
         stem = file.stem
         spatial_path = val_spatial_dir / f"{stem}.npz"
         
-        if not spatial_path.exists() or stem not in morph_df.index:
+        if not spatial_path.exists():
             continue
             
         real_images.append(Image.open(file).convert("RGB"))
@@ -138,10 +129,6 @@ def run_phase2_validation(accelerator, pipeline, args, global_step):
         # Load compressed .npz map
         spatial_data = np.load(spatial_path)
         spatial_maps.append(spatial_data['map'])
-        
-        # Load morphology features from parquet
-        morph_row = torch.tensor(morph_df.loc[stem].values, dtype=torch.float32)
-        morphologies.append(morph_row)
         
         stems.append(stem)
 
@@ -157,12 +144,12 @@ def run_phase2_validation(accelerator, pipeline, args, global_step):
     visualization_grids = []
     weight_dtype = pipeline.unet.dtype
     
-    dataset = list(zip(real_images, spatial_maps, morphologies, stems))
+    dataset = list(zip(real_images, spatial_maps, stems))
     with accelerator.split_between_processes(dataset) as local_dataset:
         if len(local_dataset) > 0:
-            local_reals, local_spatials, local_morphs, local_stems = zip(*local_dataset)
+            local_reals, local_spatials, local_stems = zip(*local_dataset)
         else:
-            local_reals, local_spatials, local_morphs, local_stems = [], [], [], []
+            local_reals, local_spatials, local_stems = [], [], []
             
         batch_size = 16
         for i in tqdm(range(0, len(local_reals), batch_size), disable=not accelerator.is_local_main_process):
@@ -170,7 +157,6 @@ def run_phase2_validation(accelerator, pipeline, args, global_step):
             
             # Batch slices
             spatial_batch = local_spatials[i : i + current_batch_size]
-            morph_batch = local_morphs[i : i + current_batch_size]
             prompts = ["he"] * current_batch_size
             
             # Prepare batched tensors
@@ -178,18 +164,7 @@ def run_phase2_validation(accelerator, pipeline, args, global_step):
                 torch.from_numpy(sm).float().permute(2, 0, 1)
             for sm in spatial_batch]).to(accelerator.device, dtype=weight_dtype)
             
-            morph_tensor = torch.stack(morph_batch).to(accelerator.device, dtype=weight_dtype)
-            
-            # Stable Diffusion CFG runs batched unconditional and conditional passes.
-            # So the UNet actually processes (batch_size * 2) examples. 
-            # We must explicitly attach the duplicated morphology tensor to the unet blocks.
-            morph_tensor_dup = torch.cat([morph_tensor, morph_tensor], dim=0)
-            
-            for module in pipeline.unet.modules():
-                if hasattr(module, "current_morph16"):
-                    module.current_morph16 = morph_tensor_dup
-            
-            # Forward pass through pipeline
+            # Forward pass through pipeline (no FiLM injection)
             with torch.autocast("cuda", dtype=weight_dtype):
                 outputs = pipeline(
                     prompt=prompts, 

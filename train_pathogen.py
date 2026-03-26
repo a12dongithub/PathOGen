@@ -39,63 +39,19 @@ from torch.utils.data import Dataset
 import cv2
 import os
 
-class FiLM_MLP(nn.Module):
-    def __init__(self, in_dim=16, out_dim=320):
-        super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(in_dim, out_dim),
-            nn.SiLU(),
-            nn.Linear(out_dim, out_dim * 2)
-        )
-    def forward(self, x):
-        gamma_beta = self.net(x)
-        gamma, beta = gamma_beta.chunk(2, dim=-1)
-        # Clamp to prevent FiLM from overwhelming UNet activations
-        gamma = gamma.clamp(-0.5, 0.5)
-        beta = beta.clamp(-0.5, 0.5)
-        # Reshape to (B, C, 1, 1) for spatial broadcasting
-        return gamma.unsqueeze(-1).unsqueeze(-1), beta.unsqueeze(-1).unsqueeze(-1)
-
-# Monkey patch UNet resnets
-def inject_film_into_unet(unet, film_dim=16):
-    film_mlps = nn.ModuleList()
-    
-    # We patch the forward method of ResnetBlock2D in the UNet.
-    # To avoid complex AST parsing, we wrap the original forward.
-    for name, module in unet.named_modules():
-        if module.__class__.__name__ == "ResnetBlock2D":
-            channels = module.out_channels
-            mlp = FiLM_MLP(film_dim, channels).to(unet.device)
-            film_mlps.append(mlp)
-            
-            # Store original
-            module.original_forward = module.forward
-            module.film_mlp = mlp
-            
-            def new_forward(self, hidden_states, temb=None, **kwargs):
-                # Run original block
-                out = self.original_forward(hidden_states, temb, **kwargs)
-                
-                # Apply FiLM if morph16 is provided in a global or attached variable
-                if hasattr(self, 'current_morph16') and self.current_morph16 is not None:
-                    gamma, beta = self.film_mlp(self.current_morph16)
-                    out = (1.0 + gamma) * out + beta
-                return out
-                
-            # Bind the new method
-            module.forward = new_forward.__get__(module, module.__class__)
-
-    return film_mlps
+# FiLM conditioning has been removed for this experiment.
+# This version trains UNet + VAE + ControlNet only (spatial layout conditioning).
 
 class PathOGenDataset(Dataset):
     def __init__(self, data_dir, image_transforms=None, tokenizer=None):
         self.data_dir = data_dir
         self.image_dir = os.path.join(data_dir, "tiles")
         self.map_dir = os.path.join(data_dir, "spatial_maps")
-        self.morph_path = os.path.join(data_dir, "morphology_features", "morphology_stats.parquet")
         
-        self.morph_df = pd.read_parquet(self.morph_path)
-        self.stems = list(self.morph_df.index)
+        # Build stem list from spatial maps (no morphology dependency)
+        self.stems = sorted([
+            os.path.splitext(f)[0] for f in os.listdir(self.map_dir) if f.endswith(".npz")
+        ])
         self.image_transforms = image_transforms
         self.tokenizer = tokenizer
 
@@ -115,12 +71,8 @@ class PathOGenDataset(Dataset):
         
         # Load Map (512x512x5)
         map_path = os.path.join(self.map_dir, f"{stem}.npz")
-        # Extract map array and scale from uint8 (0-255) to float32 (0.0-1.0)
         spatial_map = np.load(map_path)['map'].astype(np.float32) / 255.0
         
-        # Determine crop or use raw 512x512
-        # SD expects images as Tensors (-1 to 1) and conditioning as Tensors (0 to 1) 
-        # ControlNet script handles basic transforms. We supply raw arrays and transform them.
         import PIL.Image
         img_pil = PIL.Image.fromarray(img)
         
@@ -130,8 +82,6 @@ class PathOGenDataset(Dataset):
             img_tensor = torch.from_numpy(img).permute(2,0,1).float() / 127.5 - 1.0
             
         map_tensor = torch.from_numpy(spatial_map).permute(2,0,1).float()
-        
-        morph16 = torch.tensor(self.morph_df.loc[stem].values, dtype=torch.float32)
         
         text = "he"
         if self.tokenizer is not None:
@@ -145,7 +95,6 @@ class PathOGenDataset(Dataset):
         return {
             "pixel_values": img_tensor,
             "conditioning_pixel_values": map_tensor,
-            "morph16": morph16,
             "text": text,
             "input_ids": input_ids
         }
@@ -153,14 +102,12 @@ class PathOGenDataset(Dataset):
 def collate_fn(examples):
     pixel_values = torch.stack([example["pixel_values"] for example in examples])
     pipeline_cond = torch.stack([example["conditioning_pixel_values"] for example in examples])
-    morph16 = torch.stack([example["morph16"] for example in examples])
     text = [example["text"] for example in examples]
     input_ids = torch.stack([example["input_ids"] for example in examples])
     
     return {
         "pixel_values": pixel_values,
         "conditioning_pixel_values": pipeline_cond,
-        "morph16": morph16,
         "text": text,
         "input_ids": input_ids
     }
@@ -860,6 +807,8 @@ def main(args):
                         model.save_pretrained(os.path.join(output_dir, "controlnet"))
                     elif isinstance(model, UNet2DConditionModel):
                         model.save_pretrained(os.path.join(output_dir, "unet"))
+                    elif isinstance(model, AutoencoderKL):
+                        model.save_pretrained(os.path.join(output_dir, "vae"))
                     
                     # make sure to pop weight so that corresponding model is not saved again
                     if len(weights) > 0:
@@ -878,21 +827,29 @@ def main(args):
                 elif isinstance(model, UNet2DConditionModel):
                     unet_path = os.path.join(input_dir, "unet")
                     if os.path.exists(unet_path):
-                        # For PyTorch loading UNet checkpoint which might not natively contain the inserted FiLM vectors
                         load_model = UNet2DConditionModel.from_pretrained(input_dir, subfolder="unet")
                         model.register_to_config(**load_model.config)
-                        # Use strict=False so custom FiLM MLP weights injected randomly aren't flagged as errors if uninitialized or mismatching
-                        model.load_state_dict(load_model.state_dict(), strict=False)
+                        model.load_state_dict(load_model.state_dict())
                         del load_model
                     else:
-                        logger.info(f"Skipping UNet load: '{unet_path}' not found (backward compatible resume for older checkpoints).")
+                        logger.info(f"Skipping UNet load: '{unet_path}' not found.")
+                elif isinstance(model, AutoencoderKL):
+                    vae_path = os.path.join(input_dir, "vae")
+                    if os.path.exists(vae_path):
+                        load_model = AutoencoderKL.from_pretrained(input_dir, subfolder="vae")
+                        model.load_state_dict(load_model.state_dict())
+                        del load_model
+                    else:
+                        logger.info(f"Skipping VAE load: '{vae_path}' not found.")
 
         accelerator.register_save_state_pre_hook(save_model_hook)
         accelerator.register_load_state_pre_hook(load_model_hook)
 
-    vae.requires_grad_(False)
+    # Train UNet + VAE + ControlNet; freeze text encoder only
+    vae.requires_grad_(True)
     unet.requires_grad_(True)
     text_encoder.requires_grad_(False)
+    vae.train()
     unet.train()
     controlnet.train()
 
@@ -949,23 +906,11 @@ def main(args):
         optimizer_class = torch.optim.AdamW
 
     # Optimizer creation
-    
-    # Setup FiLM MLPs
-    logger.info("Injecting FiLM MLPs into UNet...")
-    film_mlps = inject_film_into_unet(unet, film_dim=16)
-    
-    # Track parameters for optimization with separate learning rate groups
-    # UNet is already pretrained — use 10x smaller LR to avoid catastrophic forgetting
-    # ControlNet and FiLM are trained from scratch — use the full LR
-    # NOTE: FiLM MLPs are injected as submodules of UNet ResnetBlocks, so unet.parameters()
-    # already includes them. We must exclude them from the UNet group to avoid duplicates.
-    film_mlps.to(accelerator.device)
-    film_param_ids = {id(p) for p in film_mlps.parameters()}
-    unet_only_params = [p for p in unet.parameters() if id(p) not in film_param_ids]
+    # UNet + VAE (pretrained) use gentle LR; ControlNet (from scratch) uses full LR
     params_to_optimize = [
-        {"params": unet_only_params, "lr": args.learning_rate * 0.1},
-        {"params": list(controlnet.parameters()), "lr": args.learning_rate * 0.5},
-        {"params": list(film_mlps.parameters()), "lr": args.learning_rate},
+        {"params": list(unet.parameters()), "lr": args.learning_rate * 0.1},
+        {"params": list(vae.parameters()), "lr": args.learning_rate * 0.1},
+        {"params": list(controlnet.parameters()), "lr": args.learning_rate},
     ]
     
     optimizer = optimizer_class(
@@ -1017,20 +962,19 @@ def main(args):
     )
 
     # Prepare everything with our `accelerator`.
-    unet, controlnet, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
-        unet, controlnet, optimizer, train_dataloader, lr_scheduler
+    unet, vae, controlnet, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
+        unet, vae, controlnet, optimizer, train_dataloader, lr_scheduler
     )
 
-    # For mixed precision training we cast the text_encoder and vae weights to half-precision
-    # as these models are only used for inference, keeping weights in full precision is not required.
+    # For mixed precision training we cast the text_encoder weights to half-precision
+    # as it is only used for inference. VAE and UNet stay in float32 since they are trainable.
     weight_dtype = torch.float32
     if accelerator.mixed_precision == "fp16":
         weight_dtype = torch.float16
     elif accelerator.mixed_precision == "bf16":
         weight_dtype = torch.bfloat16
 
-    # Move vae and text_encoder to device and cast to weight_dtype
-    vae.to(accelerator.device, dtype=weight_dtype)
+    # Only cast frozen text_encoder to weight_dtype; VAE stays float32 (trainable)
     text_encoder.to(accelerator.device, dtype=weight_dtype)
 
     # We need to recalculate our total training steps as the size of the training dataloader may have changed.
@@ -1109,9 +1053,9 @@ def main(args):
     image_logs = None
     for epoch in range(first_epoch, args.num_train_epochs):
         for step, batch in enumerate(train_dataloader):
-            with accelerator.accumulate(unet, controlnet):
-                # Convert images to latent space
-                latents = vae.encode(batch["pixel_values"].to(dtype=weight_dtype)).latent_dist.sample()
+            with accelerator.accumulate(unet, vae, controlnet):
+                # Convert images to latent space (VAE is in float32 since trainable)
+                latents = vae.encode(batch["pixel_values"].float()).latent_dist.sample()
                 latents = latents * vae.config.scaling_factor
 
                 # Sample noise that we'll add to the latents
@@ -1140,11 +1084,7 @@ def main(args):
                     return_dict=False,
                 )
 
-                
-                # Inject morphological condition
-                for module in unet.modules():
-                    if hasattr(module, 'film_mlp'):
-                        module.current_morph16 = batch["morph16"].to(dtype=weight_dtype)
+
 
                 # Predict the noise residual
                 # Scale ControlNet residuals by 0.5 to prevent signal domination.
@@ -1173,7 +1113,7 @@ def main(args):
 
                 accelerator.backward(loss)
                 if accelerator.sync_gradients:
-                    all_params = list(unet.parameters()) + list(controlnet.parameters()) + list(film_mlps.parameters())
+                    all_params = list(unet.parameters()) + list(vae.parameters()) + list(controlnet.parameters())
                     accelerator.clip_grad_norm_(all_params, args.max_grad_norm)
                 optimizer.step()
                 lr_scheduler.step()
