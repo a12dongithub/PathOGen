@@ -930,7 +930,7 @@ def main(args):
         ]
     )
 
-    train_dataset = PathOGenDataset(data_dir="/workspace/PathOGen/data", image_transforms=image_column_transform, tokenizer=tokenizer)
+    train_dataset = PathOGenDataset(data_dir="/home/samarth.singhal/PathOGen/data", image_transforms=image_column_transform, tokenizer=tokenizer)
 
     train_dataloader = torch.utils.data.DataLoader(
         train_dataset,
