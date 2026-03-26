@@ -807,8 +807,7 @@ def main(args):
                         model.save_pretrained(os.path.join(output_dir, "controlnet"))
                     elif isinstance(model, UNet2DConditionModel):
                         model.save_pretrained(os.path.join(output_dir, "unet"))
-                    elif isinstance(model, AutoencoderKL):
-                        model.save_pretrained(os.path.join(output_dir, "vae"))
+
                     
                     # make sure to pop weight so that corresponding model is not saved again
                     if len(weights) > 0:
@@ -833,23 +832,15 @@ def main(args):
                         del load_model
                     else:
                         logger.info(f"Skipping UNet load: '{unet_path}' not found.")
-                elif isinstance(model, AutoencoderKL):
-                    vae_path = os.path.join(input_dir, "vae")
-                    if os.path.exists(vae_path):
-                        load_model = AutoencoderKL.from_pretrained(input_dir, subfolder="vae")
-                        model.load_state_dict(load_model.state_dict())
-                        del load_model
-                    else:
-                        logger.info(f"Skipping VAE load: '{vae_path}' not found.")
+
 
         accelerator.register_save_state_pre_hook(save_model_hook)
         accelerator.register_load_state_pre_hook(load_model_hook)
 
-    # Train UNet + VAE + ControlNet; freeze text encoder only
-    vae.requires_grad_(True)
+    # Train UNet + ControlNet; freeze VAE and text encoder
+    vae.requires_grad_(False)
     unet.requires_grad_(True)
     text_encoder.requires_grad_(False)
-    vae.train()
     unet.train()
     controlnet.train()
 
@@ -906,10 +897,9 @@ def main(args):
         optimizer_class = torch.optim.AdamW
 
     # Optimizer creation
-    # UNet + VAE (pretrained) use gentle LR; ControlNet (from scratch) uses full LR
+    # UNet (pretrained) uses gentle LR; ControlNet (from scratch) uses full LR
     params_to_optimize = [
         {"params": list(unet.parameters()), "lr": args.learning_rate * 0.1},
-        {"params": list(vae.parameters()), "lr": args.learning_rate * 0.1},
         {"params": list(controlnet.parameters()), "lr": args.learning_rate},
     ]
     
@@ -962,19 +952,19 @@ def main(args):
     )
 
     # Prepare everything with our `accelerator`.
-    unet, vae, controlnet, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
-        unet, vae, controlnet, optimizer, train_dataloader, lr_scheduler
+    unet, controlnet, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
+        unet, controlnet, optimizer, train_dataloader, lr_scheduler
     )
 
-    # For mixed precision training we cast the text_encoder weights to half-precision
-    # as it is only used for inference. VAE and UNet stay in float32 since they are trainable.
+    # For mixed precision training we cast frozen models to half-precision
     weight_dtype = torch.float32
     if accelerator.mixed_precision == "fp16":
         weight_dtype = torch.float16
     elif accelerator.mixed_precision == "bf16":
         weight_dtype = torch.bfloat16
 
-    # Only cast frozen text_encoder to weight_dtype; VAE stays float32 (trainable)
+    # Move frozen models to device and cast to weight_dtype
+    vae.to(accelerator.device, dtype=weight_dtype)
     text_encoder.to(accelerator.device, dtype=weight_dtype)
 
     # We need to recalculate our total training steps as the size of the training dataloader may have changed.
@@ -1053,9 +1043,9 @@ def main(args):
     image_logs = None
     for epoch in range(first_epoch, args.num_train_epochs):
         for step, batch in enumerate(train_dataloader):
-            with accelerator.accumulate(unet, vae, controlnet):
-                # Convert images to latent space (VAE is in float32 since trainable)
-                latents = vae.encode(batch["pixel_values"].float()).latent_dist.sample()
+            with accelerator.accumulate(unet, controlnet):
+                # Convert images to latent space
+                latents = vae.encode(batch["pixel_values"].to(dtype=weight_dtype)).latent_dist.sample()
                 latents = latents * vae.config.scaling_factor
 
                 # Sample noise that we'll add to the latents
@@ -1113,7 +1103,7 @@ def main(args):
 
                 accelerator.backward(loss)
                 if accelerator.sync_gradients:
-                    all_params = list(unet.parameters()) + list(vae.parameters()) + list(controlnet.parameters())
+                    all_params = list(unet.parameters()) + list(controlnet.parameters())
                     accelerator.clip_grad_norm_(all_params, args.max_grad_norm)
                 optimizer.step()
                 lr_scheduler.step()
