@@ -1057,7 +1057,7 @@ def main(args):
             with accelerator.accumulate(unet, vae, controlnet):
                 # Convert images to latent space (unwrap DDP to access .encode())
                 latents = unwrap_model(vae).encode(batch["pixel_values"].float()).latent_dist.sample()
-                latents = latents * vae.config.scaling_factor
+                latents = latents * unwrap_model(vae).config.scaling_factor
 
                 # Sample noise that we'll add to the latents
                 noise = torch.randn_like(latents)
