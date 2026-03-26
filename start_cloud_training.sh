@@ -89,7 +89,7 @@ echo "[4/6] Phase 1: Domain adaptation (unconditional H&E generation)..."
 # FRESH START from Phase 1 checkpoint-30000 (best FID).
 echo "[5/6] Phase 2: ControlNet (spatial) + UNet + VAE training (no FiLM)..."
 accelerate launch --multi_gpu --num_processes=8 train_pathogen.py \
-    --pretrained_model_name_or_path='./checkpoints/phase1_domain_adapt' \
+    --pretrained_model_name_or_path='Manojb/stable-diffusion-2-1-base' \
     --phase1_unet_checkpoint='./checkpoints/phase1_domain_adapt/checkpoint-30000' \
     --output_dir='./checkpoints/phase2_controlnet' \
     --train_data_dir='./data' \
