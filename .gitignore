@@ -9,6 +9,11 @@
 !*.sh
 !.gitignore
 
+# Explicitly ignore local-only evaluation scripts and results
+eval_fid*.py
+*_results/
+*_eval.py
+
 # Explicitly ignore common Python/OS junk, just in case
 __pycache__/
 *.pyc
