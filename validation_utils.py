@@ -64,8 +64,8 @@ def run_phase1_validation(accelerator, pipeline, args, global_step):
             val_tiles_dir = val_dir / "images"  # Support older 'images' directory struct
         
     real_images = []
-    # Take a fixed subset (first 1000 images) for fast, consistent tracking during training
-    for file in sorted(val_tiles_dir.glob("*.png"))[:1000]:
+    # Take a fixed subset (first 2000 images) for fast, consistent tracking during training
+    for file in sorted(val_tiles_dir.glob("*.png"))[:2000]:
         real_images.append(Image.open(file).convert("RGB"))
         
     if len(real_images) == 0:
@@ -124,8 +124,8 @@ def run_phase2_validation(accelerator, pipeline, args, global_step):
     spatial_maps = []
     stems = []
     
-    # Load evaluation batch (spatial maps only, fixed subset of 1000 for training speed)
-    for file in sorted(val_tiles_dir.glob("*.png"))[:1000]:
+    # Load evaluation batch (spatial maps only, fixed subset of 2000 for training speed)
+    for file in sorted(val_tiles_dir.glob("*.png"))[:2000]:
         stem = file.stem
         spatial_path = val_spatial_dir / f"{stem}.npz"
         
