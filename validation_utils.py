@@ -57,11 +57,15 @@ def run_phase1_validation(accelerator, pipeline, args, global_step):
     val_tiles_dir = val_dir / "tiles"
     
     if not val_tiles_dir.exists():
-        accelerator.print(f"Skipping validation: {val_tiles_dir} not found.")
-        return
+        accelerator.print(f"Validation dir {val_tiles_dir} not found. Falling back to training data subset.")
+        val_dir = Path(args.train_data_dir)
+        val_tiles_dir = val_dir / "tiles"
+        if not val_tiles_dir.exists():
+            val_tiles_dir = val_dir / "images"  # Support older 'images' directory struct
         
     real_images = []
-    for file in sorted(val_tiles_dir.glob("*.png")):
+    # Take a fixed subset (first 1000 images) for fast, consistent tracking during training
+    for file in sorted(val_tiles_dir.glob("*.png"))[:1000]:
         real_images.append(Image.open(file).convert("RGB"))
         
     if len(real_images) == 0:
@@ -109,15 +113,19 @@ def run_phase2_validation(accelerator, pipeline, args, global_step):
     val_spatial_dir = val_dir / "spatial_maps"
     
     if not val_tiles_dir.exists():
-        accelerator.print(f"Skipping validation: {val_tiles_dir} not found.")
-        return
+        accelerator.print(f"Validation dir {val_tiles_dir} not found. Falling back to training data subset.")
+        val_dir = Path(args.train_data_dir)
+        val_tiles_dir = val_dir / "tiles"
+        if not val_tiles_dir.exists():
+            val_tiles_dir = val_dir / "images"
+        val_spatial_dir = val_dir / "spatial_maps"
         
     real_images = []
     spatial_maps = []
     stems = []
     
-    # Load evaluation batch (spatial maps only, no morphology)
-    for file in sorted(val_tiles_dir.glob("*.png")):
+    # Load evaluation batch (spatial maps only, fixed subset of 1000 for training speed)
+    for file in sorted(val_tiles_dir.glob("*.png"))[:1000]:
         stem = file.stem
         spatial_path = val_spatial_dir / f"{stem}.npz"
         
