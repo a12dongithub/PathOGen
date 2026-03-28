@@ -81,7 +81,7 @@ def run_phase1_validation(accelerator, pipeline, args, global_step):
     weight_dtype = pipeline.unet.dtype
     
     with accelerator.split_between_processes(real_images) as local_real_images:
-        batch_size = 16
+        batch_size = 4  # Reduced from 16 to fit in V100 32GB memory during inference
         for i in tqdm(range(0, len(local_real_images), batch_size), disable=not accelerator.is_local_main_process):
             current_batch_size = min(batch_size, len(local_real_images) - i)
             prompts = ["he"] * current_batch_size
@@ -159,7 +159,7 @@ def run_phase2_validation(accelerator, pipeline, args, global_step):
         else:
             local_reals, local_spatials, local_stems = [], [], []
             
-        batch_size = 16
+        batch_size = 4  # Reduced from 16 to fit in V100 32GB memory during inference
         for i in tqdm(range(0, len(local_reals), batch_size), disable=not accelerator.is_local_main_process):
             current_batch_size = min(batch_size, len(local_reals) - i)
             
