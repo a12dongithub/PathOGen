@@ -847,11 +847,11 @@ def main(args):
         accelerator.register_save_state_pre_hook(save_model_hook)
         accelerator.register_load_state_pre_hook(load_model_hook)
 
-    # Train UNet + VAE + ControlNet; freeze text encoder only
-    vae.requires_grad_(True)
+    # Train UNet + ControlNet; freeze text encoder and VAE
+    vae.requires_grad_(False)
     unet.requires_grad_(True)
     text_encoder.requires_grad_(False)
-    vae.train()
+    vae.eval()
     unet.train()
     controlnet.train()
 
@@ -908,10 +908,9 @@ def main(args):
         optimizer_class = torch.optim.AdamW
 
     # Optimizer creation
-    # UNet + VAE (pretrained) use gentle LR; ControlNet (from scratch) uses full LR
+    # UNet (pretrained) uses gentle LR; ControlNet (from scratch) uses full LR
     params_to_optimize = [
         {"params": list(unet.parameters()), "lr": args.learning_rate * 0.1},
-        {"params": list(vae.parameters()), "lr": args.learning_rate * 0.1},
         {"params": list(controlnet.parameters()), "lr": args.learning_rate},
     ]
     
@@ -1054,7 +1053,7 @@ def main(args):
     image_logs = None
     for epoch in range(first_epoch, args.num_train_epochs):
         for step, batch in enumerate(train_dataloader):
-            with accelerator.accumulate(unet, vae, controlnet):
+            with accelerator.accumulate(unet, controlnet):
                 # Convert images to latent space (unwrap DDP to access .encode())
                 latents = unwrap_model(vae).encode(batch["pixel_values"].float()).latent_dist.sample()
                 latents = latents * unwrap_model(vae).config.scaling_factor
@@ -1114,7 +1113,7 @@ def main(args):
 
                 accelerator.backward(loss)
                 if accelerator.sync_gradients:
-                    all_params = list(unet.parameters()) + list(vae.parameters()) + list(controlnet.parameters())
+                    all_params = list(unet.parameters()) + list(controlnet.parameters())
                     accelerator.clip_grad_norm_(all_params, args.max_grad_norm)
                 optimizer.step()
                 lr_scheduler.step()
