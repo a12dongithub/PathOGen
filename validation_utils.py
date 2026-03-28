@@ -167,9 +167,9 @@ def run_phase2_validation(accelerator, pipeline, args, global_step):
             spatial_batch = local_spatials[i : i + current_batch_size]
             prompts = ["he"] * current_batch_size
             
-            # Prepare batched tensors
+            # Prepare batched tensors (normalize to 0-1 as expected by ControlNet)
             spatial_tensor = torch.stack([
-                torch.from_numpy(sm).float().permute(2, 0, 1)
+                torch.from_numpy(sm.astype(np.float32) / 255.0).permute(2, 0, 1)
             for sm in spatial_batch]).to(accelerator.device, dtype=weight_dtype)
             
             # Forward pass through pipeline (no FiLM injection)
