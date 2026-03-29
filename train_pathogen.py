@@ -39,8 +39,9 @@ from torch.utils.data import Dataset
 import cv2
 import os
 
-# FiLM conditioning has been removed for this experiment.
-# This version trains UNet + VAE + ControlNet only (spatial layout conditioning).
+# Phase 2: Direct Concat Conditioning (no ControlNet)
+# Spatial maps are encoded to latent size and concatenated with noisy latents
+# as additional UNet input channels. UNet conv_in is expanded from 4→8 channels.
 
 class PathOGenDataset(Dataset):
     def __init__(self, data_dir, image_transforms=None, tokenizer=None):
@@ -99,6 +100,31 @@ class PathOGenDataset(Dataset):
             "input_ids": input_ids
         }
 
+class SpatialCondEncoder(nn.Module):
+    """Downsamples 512x512x5 spatial maps to 64x64x4 latent-space features.
+    
+    The final 1x1 convolution is zero-initialized so that at step 0 the
+    encoder outputs all zeros, making the model behave identically to
+    the Phase 1 baseline.
+    """
+    def __init__(self):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Conv2d(5, 32, 3, stride=2, padding=1),   # 512→256
+            nn.SiLU(),
+            nn.Conv2d(32, 64, 3, stride=2, padding=1),  # 256→128
+            nn.SiLU(),
+            nn.Conv2d(64, 128, 3, stride=2, padding=1), # 128→64
+            nn.SiLU(),
+            nn.Conv2d(128, 4, 1),                        # project to 4 channels
+        )
+        # Zero-initialize the final projection
+        nn.init.zeros_(self.net[-1].weight)
+        nn.init.zeros_(self.net[-1].bias)
+
+    def forward(self, x):
+        return self.net(x)
+
 def collate_fn(examples):
     pixel_values = torch.stack([example["pixel_values"] for example in examples])
     pipeline_cond = torch.stack([example["conditioning_pixel_values"] for example in examples])
@@ -128,11 +154,9 @@ from transformers import AutoTokenizer, PretrainedConfig
 import diffusers
 from diffusers import (
     AutoencoderKL,
-    ControlNetModel,
     DDPMScheduler,
-    StableDiffusionControlNetPipeline,
+    PNDMScheduler,
     UNet2DConditionModel,
-    UniPCMultistepScheduler,
 )
 from diffusers.optimization import get_scheduler
 from diffusers.utils import check_min_version, is_wandb_available
@@ -161,113 +185,8 @@ def image_grid(imgs, rows, cols):
     return grid
 
 
-def log_validation(
-    vae, text_encoder, tokenizer, unet, controlnet, args, accelerator, weight_dtype, step, is_final_validation=False
-):
-    logger.info("Running validation... ")
-
-    if not is_final_validation:
-        controlnet = accelerator.unwrap_model(controlnet)
-    else:
-        controlnet = ControlNetModel.from_unet(unet, conditioning_channels=5)
-
-    pipeline = StableDiffusionControlNetPipeline.from_pretrained(
-        args.pretrained_model_name_or_path,
-        vae=vae,
-        text_encoder=text_encoder,
-        tokenizer=tokenizer,
-        unet=unet,
-        controlnet=controlnet,
-        safety_checker=None,
-        revision=args.revision,
-        variant=args.variant,
-        torch_dtype=weight_dtype,
-    )
-    pipeline.scheduler = UniPCMultistepScheduler.from_config(pipeline.scheduler.config)
-    pipeline = pipeline.to(accelerator.device)
-    pipeline.set_progress_bar_config(disable=True)
-
-    if args.enable_xformers_memory_efficient_attention:
-        pipeline.enable_xformers_memory_efficient_attention()
-
-    if args.seed is None:
-        generator = None
-    else:
-        generator = torch.Generator(device=accelerator.device).manual_seed(args.seed)
-
-    if len(args.validation_image) == len(args.validation_prompt):
-        validation_images = args.validation_image
-        validation_prompts = args.validation_prompt
-    elif len(args.validation_image) == 1:
-        validation_images = args.validation_image * len(args.validation_prompt)
-        validation_prompts = args.validation_prompt
-    elif len(args.validation_prompt) == 1:
-        validation_images = args.validation_image
-        validation_prompts = args.validation_prompt * len(args.validation_image)
-    else:
-        raise ValueError(
-            "number of `args.validation_image` and `args.validation_prompt` should be checked in `parse_args`"
-        )
-
-    image_logs = []
-    inference_ctx = contextlib.nullcontext() if is_final_validation else torch.autocast("cuda")
-
-    for validation_prompt, validation_image in zip(validation_prompts, validation_images):
-        validation_image = Image.open(validation_image).convert("RGB")
-
-        images = []
-
-        for _ in range(args.num_validation_images):
-            with inference_ctx:
-                image = pipeline(
-                    validation_prompt, validation_image, num_inference_steps=20, generator=generator
-                ).images[0]
-
-            images.append(image)
-
-        image_logs.append(
-            {"validation_image": validation_image, "images": images, "validation_prompt": validation_prompt}
-        )
-
-    tracker_key = "test" if is_final_validation else "validation"
-    for tracker in accelerator.trackers:
-        if tracker.name == "tensorboard":
-            for log in image_logs:
-                images = log["images"]
-                validation_prompt = log["validation_prompt"]
-                validation_image = log["validation_image"]
-
-                formatted_images = [np.asarray(validation_image)]
-
-                for image in images:
-                    formatted_images.append(np.asarray(image))
-
-                formatted_images = np.stack(formatted_images)
-
-                tracker.writer.add_images(validation_prompt, formatted_images, step, dataformats="NHWC")
-        elif tracker.name == "wandb":
-            formatted_images = []
-
-            for log in image_logs:
-                images = log["images"]
-                validation_prompt = log["validation_prompt"]
-                validation_image = log["validation_image"]
-
-                formatted_images.append(wandb.Image(validation_image, caption="Controlnet conditioning"))
-
-                for image in images:
-                    image = wandb.Image(image, caption=validation_prompt)
-                    formatted_images.append(image)
-
-            tracker.log({tracker_key: formatted_images})
-        else:
-            logger.warning(f"image logging not implemented for {tracker.name}")
-
-    del pipeline
-    gc.collect()
-    torch.cuda.empty_cache()
-
-    return image_logs
+# log_validation removed — not used in concat conditioning mode.
+# All validation is handled by validation_utils.run_phase2_validation().
 
 
 def import_model_class_from_model_name_or_path(pretrained_model_name_or_path: str, revision: str):
@@ -784,12 +703,25 @@ def main(args):
         del phase1_unet
         logger.info("UNet weights successfully overridden from Phase 1 checkpoint.")
 
-    if args.controlnet_model_name_or_path:
-        logger.info("Loading existing controlnet weights")
-        controlnet = ControlNetModel.from_unet(unet, conditioning_channels=5)
-    else:
-        logger.info("Initializing controlnet weights from unet")
-        controlnet = ControlNetModel.from_unet(unet, conditioning_channels=5)
+    # Create the spatial conditioning encoder
+    spatial_encoder = SpatialCondEncoder()
+    logger.info("Created SpatialCondEncoder (zero-initialized output layer)")
+
+    # Expand UNet conv_in from 4 → 8 channels (4 latent + 4 spatial features)
+    old_conv_in = unet.conv_in
+    new_conv_in = nn.Conv2d(
+        8, old_conv_in.out_channels,
+        kernel_size=old_conv_in.kernel_size,
+        stride=old_conv_in.stride,
+        padding=old_conv_in.padding,
+    )
+    with torch.no_grad():
+        new_conv_in.weight[:, :4] = old_conv_in.weight
+        new_conv_in.weight[:, 4:] = 0.0
+        new_conv_in.bias.copy_(old_conv_in.bias)
+    unet.conv_in = new_conv_in
+    unet.config['in_channels'] = 8
+    logger.info("Expanded UNet conv_in: 4 → 8 channels (zero-initialized spatial channels)")
 
     # Taken from [Sayak Paul's Diffusers PR #6511](https://github.com/huggingface/diffusers/pull/6511/files)
     def unwrap_model(model):
@@ -803,29 +735,22 @@ def main(args):
         def save_model_hook(models, weights, output_dir):
             if accelerator.is_main_process:
                 for i, model in enumerate(models):
-                    if isinstance(model, ControlNetModel):
-                        model.save_pretrained(os.path.join(output_dir, "controlnet"))
-                    elif isinstance(model, UNet2DConditionModel):
+                    if isinstance(model, UNet2DConditionModel):
                         model.save_pretrained(os.path.join(output_dir, "unet"))
                     elif isinstance(model, AutoencoderKL):
                         model.save_pretrained(os.path.join(output_dir, "vae"))
+                    elif isinstance(model, SpatialCondEncoder):
+                        torch.save(model.state_dict(), os.path.join(output_dir, "spatial_encoder.pt"))
 
-                    
                     # make sure to pop weight so that corresponding model is not saved again
                     if len(weights) > 0:
                         weights.pop()
 
         def load_model_hook(models, input_dir):
             while len(models) > 0:
-                # pop models so that they are not loaded again
                 model = models.pop()
 
-                if isinstance(model, ControlNetModel):
-                    load_model = ControlNetModel.from_pretrained(input_dir, subfolder="controlnet")
-                    model.register_to_config(**load_model.config)
-                    model.load_state_dict(load_model.state_dict())
-                    del load_model
-                elif isinstance(model, UNet2DConditionModel):
+                if isinstance(model, UNet2DConditionModel):
                     unet_path = os.path.join(input_dir, "unet")
                     if os.path.exists(unet_path):
                         load_model = UNet2DConditionModel.from_pretrained(input_dir, subfolder="unet")
@@ -842,18 +767,24 @@ def main(args):
                         del load_model
                     else:
                         logger.info(f"Skipping VAE load: '{vae_path}' not found.")
-
+                elif isinstance(model, SpatialCondEncoder):
+                    enc_path = os.path.join(input_dir, "spatial_encoder.pt")
+                    if os.path.exists(enc_path):
+                        model.load_state_dict(torch.load(enc_path, map_location="cpu"))
+                    else:
+                        logger.info(f"Skipping SpatialCondEncoder load: '{enc_path}' not found.")
 
         accelerator.register_save_state_pre_hook(save_model_hook)
         accelerator.register_load_state_pre_hook(load_model_hook)
 
-    # Train UNet + ControlNet; freeze text encoder and VAE
+    # Train UNet + SpatialCondEncoder; freeze text encoder and VAE
     vae.requires_grad_(False)
     unet.requires_grad_(True)
+    spatial_encoder.requires_grad_(True)
     text_encoder.requires_grad_(False)
     vae.eval()
     unet.train()
-    controlnet.train()
+    spatial_encoder.train()
 
     if args.enable_xformers_memory_efficient_attention:
         if is_xformers_available():
@@ -865,12 +796,10 @@ def main(args):
                     "xFormers 0.0.16 cannot be used for training in some GPUs. If you observe problems during training, please update xFormers to at least 0.0.17. See https://huggingface.co/docs/diffusers/main/en/optimization/xformers for more details."
                 )
             unet.enable_xformers_memory_efficient_attention()
-            controlnet.enable_xformers_memory_efficient_attention()
         else:
             raise ValueError("xformers is not available. Make sure it is installed correctly")
 
     if args.gradient_checkpointing:
-        controlnet.enable_gradient_checkpointing()
         unet.enable_gradient_checkpointing()
 
     # Check that all trainable models are in full precision
@@ -878,11 +807,6 @@ def main(args):
         " Please make sure to always have all model weights in full float32 precision when starting training - even if"
         " doing mixed precision training, copy of the weights should still be float32."
     )
-
-    if unwrap_model(controlnet).dtype != torch.float32:
-        raise ValueError(
-            f"Controlnet loaded as datatype {unwrap_model(controlnet).dtype}. {low_precision_error_string}"
-        )
 
     # Enable TF32 for faster training on Ampere GPUs,
     # cf https://pytorch.org/docs/stable/notes/cuda.html#tensorfloat-32-tf32-on-ampere-devices
@@ -908,10 +832,10 @@ def main(args):
         optimizer_class = torch.optim.AdamW
 
     # Optimizer creation
-    # UNet (pretrained) uses gentle LR; ControlNet (from scratch) uses full LR
+    # Full LR for both: zero-init preserves Phase 1 baseline at step 0
     params_to_optimize = [
-        {"params": list(unet.parameters()), "lr": args.learning_rate * 0.1},
-        {"params": list(controlnet.parameters()), "lr": args.learning_rate},
+        {"params": list(unet.parameters()), "lr": args.learning_rate},
+        {"params": list(spatial_encoder.parameters()), "lr": args.learning_rate},
     ]
     
     optimizer = optimizer_class(
@@ -963,12 +887,11 @@ def main(args):
     )
 
     # Prepare everything with our `accelerator`.
-    unet, vae, controlnet, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
-        unet, vae, controlnet, optimizer, train_dataloader, lr_scheduler
+    unet, vae, spatial_encoder, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
+        unet, vae, spatial_encoder, optimizer, train_dataloader, lr_scheduler
     )
 
-    # For mixed precision training we cast the frozen text_encoder to half-precision.
-    # VAE stays float32 since it is trainable.
+    # For mixed precision training we cast the frozen text_encoder/VAE to half-precision.
     weight_dtype = torch.float32
     if accelerator.mixed_precision == "fp16":
         weight_dtype = torch.float16
@@ -1053,7 +976,7 @@ def main(args):
     image_logs = None
     for epoch in range(first_epoch, args.num_train_epochs):
         for step, batch in enumerate(train_dataloader):
-            with accelerator.accumulate(unet, controlnet):
+            with accelerator.accumulate(unet, spatial_encoder):
                 # Convert images to latent space (unwrap DDP to access .encode())
                 latents = unwrap_model(vae).encode(batch["pixel_values"].float()).latent_dist.sample()
                 latents = latents * unwrap_model(vae).config.scaling_factor
@@ -1066,7 +989,6 @@ def main(args):
                 timesteps = timesteps.long()
 
                 # Add noise to the latents according to the noise magnitude at each timestep
-                # (this is the forward diffusion process)
                 noisy_latents = noise_scheduler.add_noise(latents.float(), noise.float(), timesteps).to(
                     dtype=weight_dtype
                 )
@@ -1074,31 +996,16 @@ def main(args):
                 # Get the text embedding for conditioning
                 encoder_hidden_states = text_encoder(batch["input_ids"], return_dict=False)[0]
 
-                controlnet_image = batch["conditioning_pixel_values"].to(dtype=weight_dtype)
-
-                down_block_res_samples, mid_block_res_sample = controlnet(
-                    noisy_latents,
-                    timesteps,
-                    encoder_hidden_states=encoder_hidden_states,
-                    controlnet_cond=controlnet_image,
-                    return_dict=False,
-                )
-
-
+                # Encode spatial map to latent-sized features and concat with noisy latents
+                spatial_cond = batch["conditioning_pixel_values"].to(dtype=weight_dtype)
+                spatial_features = spatial_encoder(spatial_cond)  # 512x512x5 → 64x64x4
+                unet_input = torch.cat([noisy_latents, spatial_features], dim=1)  # 64x64x8
 
                 # Predict the noise residual
-                # Scale ControlNet residuals by 0.5 to prevent signal domination.
-                # Without this, ControlNet residuals grow to overwhelm UNet features,
-                # producing spatial markers (blue dots) instead of realistic H&E.
-                cond_scale = 0.5
                 model_pred = unet(
-                    noisy_latents,
+                    unet_input,
                     timesteps,
                     encoder_hidden_states=encoder_hidden_states,
-                    down_block_additional_residuals=[
-                        sample.to(dtype=weight_dtype) * cond_scale for sample in down_block_res_samples
-                    ],
-                    mid_block_additional_residual=mid_block_res_sample.to(dtype=weight_dtype) * cond_scale,
                     return_dict=False,
                 )[0]
 
@@ -1113,7 +1020,7 @@ def main(args):
 
                 accelerator.backward(loss)
                 if accelerator.sync_gradients:
-                    all_params = list(unet.parameters()) + list(controlnet.parameters())
+                    all_params = list(unet.parameters()) + list(spatial_encoder.parameters())
                     accelerator.clip_grad_norm_(all_params, args.max_grad_norm)
                 optimizer.step()
                 lr_scheduler.step()
@@ -1150,38 +1057,16 @@ def main(args):
                         accelerator.save_state(save_path)
                         logger.info(f"Saved state to {save_path}")
 
-                    # Run FID and Visual Validation every 10k steps and on step 1
+                    # Run FID and Visual Validation every 5k steps and on step 1
                 if global_step % 5000 == 0 or global_step == 1:
-                    # Reconstruct the pipeline using the current checkpoint state
                     temp_unet = accelerator.unwrap_model(unet)
-                    temp_controlnet = accelerator.unwrap_model(controlnet)
                     temp_vae = accelerator.unwrap_model(vae)
-                        
-                    pipeline = StableDiffusionControlNetPipeline.from_pretrained(
-                        args.pretrained_model_name_or_path,
-                        text_encoder=text_encoder,
-                        vae=temp_vae,
-                        unet=temp_unet,
-                        controlnet=temp_controlnet,
-                        revision=args.revision,
-                        variant=args.variant,
+                    temp_spatial_encoder = accelerator.unwrap_model(spatial_encoder)
+                    validation_utils.run_phase2_validation(
+                        accelerator, temp_unet, temp_vae, temp_spatial_encoder,
+                        text_encoder, tokenizer, noise_scheduler,
+                        args, global_step, weight_dtype,
                     )
-                    # Push it into the validation utility
-                    validation_utils.run_phase2_validation(accelerator, pipeline, args, global_step)
-
-                if accelerator.is_main_process:
-                    if args.validation_prompt is not None and global_step % args.validation_steps == 0:
-                        image_logs = log_validation(
-                            vae,
-                            text_encoder,
-                            tokenizer,
-                            unet,
-                            controlnet,
-                            args,
-                            accelerator,
-                            weight_dtype,
-                            global_step,
-                        )
 
             logs = {"loss": loss.detach().item(), "lr": lr_scheduler.get_last_lr()[0]}
             progress_bar.set_postfix(**logs)
@@ -1190,41 +1075,15 @@ def main(args):
             if global_step >= args.max_train_steps:
                 break
 
-    # Create the pipeline using the trained modules and save it.
+    # Save the trained modules.
     accelerator.wait_for_everyone()
     if accelerator.is_main_process:
-        controlnet = unwrap_model(controlnet)
-        controlnet.save_pretrained(args.output_dir)
-
-        # Run a final round of validation.
-        image_logs = None
-        if args.validation_prompt is not None:
-            image_logs = log_validation(
-                vae=vae,
-                text_encoder=text_encoder,
-                tokenizer=tokenizer,
-                unet=unet,
-                controlnet=None,
-                args=args,
-                accelerator=accelerator,
-                weight_dtype=weight_dtype,
-                step=global_step,
-                is_final_validation=True,
-            )
-
-        if args.push_to_hub:
-            save_model_card(
-                repo_id,
-                image_logs=image_logs,
-                base_model=args.pretrained_model_name_or_path,
-                repo_folder=args.output_dir,
-            )
-            upload_folder(
-                repo_id=repo_id,
-                folder_path=args.output_dir,
-                commit_message="End of training",
-                ignore_patterns=["step_*", "epoch_*"],
-            )
+        # Save UNet (with expanded conv_in) and spatial encoder
+        final_unet = unwrap_model(unet)
+        final_unet.save_pretrained(os.path.join(args.output_dir, "unet"))
+        final_spatial_encoder = unwrap_model(spatial_encoder)
+        torch.save(final_spatial_encoder.state_dict(), os.path.join(args.output_dir, "spatial_encoder.pt"))
+        logger.info(f"Saved final UNet and SpatialCondEncoder to {args.output_dir}")
 
     accelerator.end_training()
 

@@ -7,14 +7,13 @@ from tqdm import tqdm
 from PIL import Image
 from torchmetrics.image.fid import FrechetInceptionDistance
 import torchvision.transforms as T
-from diffusers import StableDiffusionPipeline, StableDiffusionControlNetPipeline
+from diffusers import PNDMScheduler
 from diffusers.utils import make_image_grid
 
 # === Monkey Patch PyTorch CUDA Linalg to Bypass Missing Nightly Library ===
 original_eigvals = torch.linalg.eigvals
 def eigvals_patched(A):
     if A.is_cuda:
-        # Compute eigenvalues on CPU to dodge libtorch_cuda_linalg.so error
         return original_eigvals(A.cpu()).to(A.device)
     return original_eigvals(A)
 torch.linalg.eigvals = eigvals_patched
@@ -23,18 +22,15 @@ torch.linalg.eigvals = eigvals_patched
 def calculate_fid(real_images, generated_images, accelerator):
     """
     Computes Frechet Inception Distance between two lists of PIL images using torchmetrics.
-    Extracts features on GPU. The CPU eigen-patch safely dodges the PyTorch nightly CUDA crash.
     """
     device = accelerator.device
     fid = FrechetInceptionDistance(feature=2048, normalize=True).to(device)
     
-    # Preprocessing: FID expects Float tensors [0, 1] (because we set normalize=True)
     transform = T.Compose([
         T.Resize((299, 299)),
         T.ToTensor(),
     ])
     
-    # Process in chunks to avoid OOM
     batch_size = 32
     for i in range(0, len(real_images), batch_size):
         real_batch = torch.stack([transform(img) for img in real_images[i:i+batch_size]]).to(device)
@@ -44,67 +40,90 @@ def calculate_fid(real_images, generated_images, accelerator):
         gen_batch = torch.stack([transform(img) for img in generated_images[i:i+batch_size]]).to(device)
         fid.update(gen_batch, real=False)
         
-    # Natively synchronizes across all distributed chunks and computes score!
     return fid.compute().item()
 
-def run_phase1_validation(accelerator, pipeline, args, global_step):
-    """
-    Runs unconditional H&E generation for Phase 1 and computes FID against the val set.
-    """
-    accelerator.print(f"*** Running Phase 1 Validation at Step {global_step} ***")
-    
-    val_dir = Path(args.train_data_dir).parent / "data_val"
-    val_tiles_dir = val_dir / "tiles"
-    
-    if not val_tiles_dir.exists():
-        accelerator.print(f"Validation dir {val_tiles_dir} not found. Falling back to training data subset.")
-        val_dir = Path(args.train_data_dir)
-        val_tiles_dir = val_dir / "tiles"
-        if not val_tiles_dir.exists():
-            val_tiles_dir = val_dir / "images"  # Support older 'images' directory struct
-        
-    real_images = []
-    # Take a fixed subset (first 2000 images) for fast, consistent tracking during training
-    for file in sorted(val_tiles_dir.glob("*.png"))[:2000]:
-        real_images.append(Image.open(file).convert("RGB"))
-        
-    if len(real_images) == 0:
-        accelerator.print("Skipping validation: Empty validation directory.")
-        return
 
-    # Generate unconditional images (using the static "he" prompt)
-    accelerator.print(f"Generating {len(real_images)} unconditional H&E tiles...")
-    generator = torch.Generator(device=accelerator.device).manual_seed(args.seed if args.seed else 42)
-    pipeline.set_progress_bar_config(disable=True)
+@torch.no_grad()
+def generate_concat_conditioned(unet, vae, spatial_encoder, text_encoder, tokenizer,
+                                 noise_scheduler, spatial_maps, device, weight_dtype,
+                                 num_inference_steps=20, seed=42):
+    """
+    Manual denoising loop for concat-conditioned UNet (no ControlNet pipeline).
     
-    generated_images = []
-    weight_dtype = pipeline.unet.dtype
+    Args:
+        spatial_maps: list of numpy arrays (H, W, 5), values 0-255
+    Returns:
+        list of PIL images
+    """
+    scheduler = PNDMScheduler.from_config(noise_scheduler.config)
+    scheduler.set_timesteps(num_inference_steps, device=device)
     
-    with accelerator.split_between_processes(real_images) as local_real_images:
-        batch_size = 4  # Reduced from 16 to fit in V100 32GB memory during inference
-        for i in tqdm(range(0, len(local_real_images), batch_size), disable=not accelerator.is_local_main_process):
-            current_batch_size = min(batch_size, len(local_real_images) - i)
-            prompts = ["he"] * current_batch_size
+    # Encode text (constant "he" prompt)
+    text_inputs = tokenizer(
+        ["he"], max_length=tokenizer.model_max_length,
+        padding="max_length", truncation=True, return_tensors="pt"
+    )
+    text_embeds = text_encoder(text_inputs.input_ids.to(device), return_dict=False)[0]
+    
+    generated = []
+    batch_size = 4  # Keep small for V100 32GB memory
+    
+    for i in range(0, len(spatial_maps), batch_size):
+        current_batch = spatial_maps[i:i+batch_size]
+        bs = len(current_batch)
+        
+        # Prepare spatial conditioning  (normalize 0-255 → 0-1, then encode)
+        spatial_tensor = torch.stack([
+            torch.from_numpy(sm.astype(np.float32) / 255.0).permute(2, 0, 1)
+            for sm in current_batch
+        ]).to(device, dtype=weight_dtype)
+        
+        spatial_features = spatial_encoder(spatial_tensor)  # (bs, 4, 64, 64)
+        
+        # Expand text embeddings for the batch
+        batch_text_embeds = text_embeds.expand(bs, -1, -1)
+        
+        # Start from random noise
+        generator = torch.Generator(device=device).manual_seed(seed + i)
+        latents = torch.randn(bs, 4, 64, 64, generator=generator, device=device, dtype=weight_dtype)
+        latents = latents * scheduler.init_noise_sigma
+        
+        # Denoising loop
+        for t in scheduler.timesteps:
+            latent_model_input = scheduler.scale_model_input(latents, t)
+            
+            # Concat spatial features with noisy latents
+            unet_input = torch.cat([latent_model_input, spatial_features], dim=1)  # (bs, 8, 64, 64)
             
             with torch.autocast("cuda", dtype=weight_dtype):
-                out = pipeline(prompts, num_inference_steps=20, generator=generator).images
-            generated_images.extend(out)
-        
-        # Calculate FID across all distributed processes natively using torchmetrics
-        accelerator.wait_for_everyone()
-        if accelerator.is_main_process:
-            accelerator.print("Computing FID across all GPUs...")
+                noise_pred = unet(
+                    unet_input, t,
+                    encoder_hidden_states=batch_text_embeds,
+                    return_dict=False,
+                )[0]
             
-        fid_score = calculate_fid(local_real_images, generated_images, accelerator)
+            latents = scheduler.step(noise_pred, t, latents, return_dict=False)[0]
         
-        # Log to tracking platform (WandB / Tensorboard) on Main Process
-        if accelerator.is_main_process:
-            accelerator.print(f"--> FID Score at Step {global_step}: {fid_score:.4f}")
-            accelerator.log({"val/fid": fid_score}, step=global_step)
+        # Decode latents to images
+        latents = latents / vae.config.scaling_factor
+        with torch.autocast("cuda", dtype=weight_dtype):
+            images = vae.decode(latents.float(), return_dict=False)[0]
+        
+        # Convert to PIL
+        images = (images / 2 + 0.5).clamp(0, 1)
+        images = images.cpu().permute(0, 2, 3, 1).numpy()
+        for img_np in images:
+            pil_img = Image.fromarray((img_np * 255).astype(np.uint8))
+            generated.append(pil_img)
     
-def run_phase2_validation(accelerator, pipeline, args, global_step):
+    return generated
+
+
+def run_phase2_validation(accelerator, unet, vae, spatial_encoder,
+                          text_encoder, tokenizer, noise_scheduler,
+                          args, global_step, weight_dtype):
     """
-    Runs conditional ControlNet generation for Phase 2 (no FiLM), computes FID, and creates visual comparison grids.
+    Runs conditional concat-based generation for Phase 2, computes FID, and creates visual comparison grids.
     """
     accelerator.print(f"*** Running Phase 2 Validation at Step {global_step} ***")
     
@@ -124,7 +143,6 @@ def run_phase2_validation(accelerator, pipeline, args, global_step):
     spatial_maps = []
     stems = []
     
-    # Load evaluation batch (spatial maps only, fixed subset of 2000 for training speed)
     for file in sorted(val_tiles_dir.glob("*.png"))[:2000]:
         stem = file.stem
         spatial_path = val_spatial_dir / f"{stem}.npz"
@@ -133,11 +151,8 @@ def run_phase2_validation(accelerator, pipeline, args, global_step):
             continue
             
         real_images.append(Image.open(file).convert("RGB"))
-        
-        # Load compressed .npz map
         spatial_data = np.load(spatial_path)
         spatial_maps.append(spatial_data['map'])
-        
         stems.append(stem)
 
     if len(real_images) == 0:
@@ -145,12 +160,6 @@ def run_phase2_validation(accelerator, pipeline, args, global_step):
         return
 
     accelerator.print(f"Generating {len(real_images)} conditional H&E tiles...")
-    generator = torch.Generator(device=accelerator.device).manual_seed(args.seed if args.seed else 42)
-    pipeline.set_progress_bar_config(disable=True)
-    
-    generated_images = []
-    visualization_grids = []
-    weight_dtype = pipeline.unet.dtype
     
     dataset = list(zip(real_images, spatial_maps, stems))
     with accelerator.split_between_processes(dataset) as local_dataset:
@@ -158,67 +167,47 @@ def run_phase2_validation(accelerator, pipeline, args, global_step):
             local_reals, local_spatials, local_stems = zip(*local_dataset)
         else:
             local_reals, local_spatials, local_stems = [], [], []
-            
-        batch_size = 4  # Reduced from 16 to fit in V100 32GB memory during inference
-        for i in tqdm(range(0, len(local_reals), batch_size), disable=not accelerator.is_local_main_process):
-            current_batch_size = min(batch_size, len(local_reals) - i)
-            
-            # Batch slices
-            spatial_batch = local_spatials[i : i + current_batch_size]
-            prompts = ["he"] * current_batch_size
-            
-            # Prepare batched tensors (normalize to 0-1 as expected by ControlNet)
-            spatial_tensor = torch.stack([
-                torch.from_numpy(sm.astype(np.float32) / 255.0).permute(2, 0, 1)
-            for sm in spatial_batch]).to(accelerator.device, dtype=weight_dtype)
-            
-            # Forward pass through pipeline (no FiLM injection)
-            with torch.autocast("cuda", dtype=weight_dtype):
-                outputs = pipeline(
-                    prompt=prompts, 
-                    image=spatial_tensor,
-                    controlnet_conditioning_scale=0.5,
-                    num_inference_steps=20, 
-                    generator=generator
-                ).images
-                
-            generated_images.extend(outputs)
-            
-            # Only save the side-by-side grids on the main process to prevent duplicates
-            if accelerator.is_main_process:
-                for j, out in enumerate(outputs):
-                    global_idx = i + j
-                    if global_idx < 100:
-                        grid = make_image_grid([local_reals[global_idx], out], rows=1, cols=2)
-                        visualization_grids.append(grid)
-                        
-                        # Optionally save locally
-                        val_out = Path(args.output_dir) / "validation_images" / f"step_{global_step}"
-                        val_out.mkdir(parents=True, exist_ok=True)
-                        grid.save(val_out / f"{local_stems[global_idx]}_compare.png")
+        
+        # Generate images using concat-conditioned denoising loop
+        generated_images = generate_concat_conditioned(
+            unet, vae, spatial_encoder, text_encoder, tokenizer,
+            noise_scheduler, list(local_spatials), accelerator.device, weight_dtype,
+            num_inference_steps=20, seed=args.seed if args.seed else 42,
+        )
+        
+        # Save comparison grids (main process only, first 100)
+        if accelerator.is_main_process:
+            val_out = Path(args.output_dir) / "validation_images" / f"step_{global_step}"
+            val_out.mkdir(parents=True, exist_ok=True)
+            for j, out in enumerate(generated_images):
+                if j < 100:
+                    grid = make_image_grid([local_reals[j], out], rows=1, cols=2)
+                    grid.save(val_out / f"{local_stems[j]}_compare.png")
 
-        # Calculate FID collaboratively
+        # Calculate FID
         accelerator.wait_for_everyone()
         if accelerator.is_main_process:
             accelerator.print("Computing FID across all GPUs...")
             
         fid_score = calculate_fid(list(local_reals), generated_images, accelerator)
         
-        # Log to Tensorboard ONLY on main process
         if accelerator.is_main_process:
             accelerator.print(f"--> FID Score at Step {global_step}: {fid_score:.4f}")
             accelerator.log({"val/fid": fid_score}, step=global_step)
-    # 3. Log Image Grids to Tensorboard
-    # Tensorboard format: Tensor of shape (N, C, H, W) where N is images
-    tracker = accelerator.get_tracker("tensorboard")
-    if tracker is not None:
-        try:
-            # Convert PIL grid back to tensors for logging
-            tensor_grids = []
-            for img in visualization_grids:
-                t = T.ToTensor()(img)
-                tensor_grids.append(t)
-            batch_tensors = torch.stack(tensor_grids)
-            tracker.writer.add_images("val/real_vs_generated", batch_tensors, global_step)
-        except Exception as e:
-            accelerator.print(f"Could not log image grids to TB: {e}")
+
+    # Log image grids to Tensorboard
+    if accelerator.is_main_process:
+        tracker = accelerator.get_tracker("tensorboard")
+        if tracker is not None:
+            try:
+                tensor_grids = []
+                val_out = Path(args.output_dir) / "validation_images" / f"step_{global_step}"
+                for grid_file in sorted(val_out.glob("*_compare.png"))[:16]:
+                    img = Image.open(grid_file).convert("RGB")
+                    t = T.ToTensor()(img)
+                    tensor_grids.append(t)
+                if tensor_grids:
+                    batch_tensors = torch.stack(tensor_grids)
+                    tracker.writer.add_images("val/real_vs_generated", batch_tensors, global_step)
+            except Exception as e:
+                accelerator.print(f"Could not log image grids to TB: {e}")

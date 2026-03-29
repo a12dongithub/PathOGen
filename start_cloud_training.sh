@@ -84,15 +84,16 @@ echo "[4/6] Phase 1: Domain adaptation (unconditional H&E generation)..."
 #     --report_to='tensorboard' \
 #     --tracker_project_name='pathogen-phase1'
 
-# ── 4. Phase 2: Layout Conditioning (ControlNet + UNet + VAE, no FiLM) ──
-# Trains full UNet + VAE (gentle LR) and ControlNet (5-ch spatial maps, full LR).
-# Text stays constant "he" — model conditions on layout only.
+# ── 4. Phase 2: Concat Conditioning (Direct spatial map input to UNet) ──
+# Spatial maps are encoded to latent size by a small CNN and concatenated
+# with the noisy latents as extra UNet input channels (4→8 ch conv_in).
+# Full UNet + SpatialCondEncoder training at LR 1e-5.
 # FRESH START from Phase 1 checkpoint-30000 (best FID).
-echo "[5/6] Phase 2: ControlNet (spatial) + UNet + VAE training (no FiLM)..."
+echo "[5/6] Phase 2: Concat conditioning (spatial) + UNet training..."
 accelerate launch --multi_gpu --num_processes=4 train_pathogen.py \
     --pretrained_model_name_or_path='Manojb/stable-diffusion-2-1-base' \
     --phase1_unet_checkpoint='./checkpoints/phase1_domain_adapt/checkpoint-30000' \
-    --output_dir='./checkpoints/phase2_controlnet' \
+    --output_dir='./checkpoints/phase2_concat' \
     --train_data_dir='./data' \
     --resolution=512 \
     --learning_rate=1e-5 \
@@ -102,14 +103,14 @@ accelerate launch --multi_gpu --num_processes=4 train_pathogen.py \
     --gradient_accumulation_steps=4 \
     --gradient_checkpointing \
     --max_train_steps=80000 \
-    --checkpointing_steps=10000 \
+    --checkpointing_steps=5000 \
     --use_8bit_adam \
     --allow_tf32 \
     --dataloader_num_workers=8 \
     --report_to='tensorboard' \
-    --tracker_project_name='pathogen-phase2-no-film'
+    --tracker_project_name='pathogen-phase2-concat'
 
 echo "[6/6] Training complete! Checkpoints saved to ./checkpoints/"
 echo "  Phase 1: ./checkpoints/phase1_domain_adapt/"
-echo "  Phase 2: ./checkpoints/phase2_controlnet/"
+echo "  Phase 2: ./checkpoints/phase2_concat/"
 echo "  TensorBoard logs: tensorboard --logdir ./checkpoints/"
