@@ -1,4 +1,5 @@
 import os
+import random
 import torch
 import numpy as np
 import cv2
@@ -7,7 +8,7 @@ from tqdm import tqdm
 from PIL import Image
 from torchmetrics.image.fid import FrechetInceptionDistance
 import torchvision.transforms as T
-from diffusers import PNDMScheduler
+from diffusers import DDIMScheduler
 from diffusers.utils import make_image_grid
 
 # === Monkey Patch PyTorch CUDA Linalg to Bypass Missing Nightly Library ===
@@ -49,14 +50,21 @@ def generate_concat_conditioned(unet, vae, spatial_encoder, text_encoder, tokeni
                                  num_inference_steps=20, seed=42):
     """
     Manual denoising loop for concat-conditioned UNet (no ControlNet pipeline).
+    Uses DDIM scheduler (SD 2.1 default) for correct denoising behavior.
     
     Args:
         spatial_maps: list of numpy arrays (H, W, 5), values 0-255
     Returns:
         list of PIL images
     """
-    scheduler = PNDMScheduler.from_config(noise_scheduler.config)
+    # Use DDIM — the default inference scheduler for SD 2.1 base.
+    # PNDMScheduler produces incorrect results with SD 2.1's beta schedule.
+    scheduler = DDIMScheduler.from_config(noise_scheduler.config)
     scheduler.set_timesteps(num_inference_steps, device=device)
+    
+    # Switch models to eval mode for deterministic inference
+    unet.eval()
+    spatial_encoder.eval()
     
     # Encode text (constant "he" prompt)
     text_inputs = tokenizer(
@@ -72,7 +80,7 @@ def generate_concat_conditioned(unet, vae, spatial_encoder, text_encoder, tokeni
         current_batch = spatial_maps[i:i+batch_size]
         bs = len(current_batch)
         
-        # Prepare spatial conditioning  (normalize 0-255 → 0-1, then encode)
+        # Prepare spatial conditioning (normalize 0-255 → 0-1, then encode)
         spatial_tensor = torch.stack([
             torch.from_numpy(sm.astype(np.float32) / 255.0).permute(2, 0, 1)
             for sm in current_batch
@@ -80,10 +88,15 @@ def generate_concat_conditioned(unet, vae, spatial_encoder, text_encoder, tokeni
         
         spatial_features = spatial_encoder(spatial_tensor)  # (bs, 4, 64, 64)
         
+        # Diagnostic: check if spatial encoder is outputting zeros (should be ~0 at step 0)
+        if i == 0:
+            feat_abs_mean = spatial_features.abs().mean().item()
+            print(f"  [diag] spatial_encoder output |mean|: {feat_abs_mean:.8f}")
+        
         # Expand text embeddings for the batch
         batch_text_embeds = text_embeds.expand(bs, -1, -1)
         
-        # Start from random noise
+        # Start from random noise  
         generator = torch.Generator(device=device).manual_seed(seed + i)
         latents = torch.randn(bs, 4, 64, 64, generator=generator, device=device, dtype=weight_dtype)
         latents = latents * scheduler.init_noise_sigma
@@ -105,16 +118,19 @@ def generate_concat_conditioned(unet, vae, spatial_encoder, text_encoder, tokeni
             latents = scheduler.step(noise_pred, t, latents, return_dict=False)[0]
         
         # Decode latents to images
-        latents = latents / vae.config.scaling_factor
-        with torch.autocast("cuda", dtype=weight_dtype):
-            images = vae.decode(latents.float(), return_dict=False)[0]
+        latents_for_decode = latents / vae.config.scaling_factor
+        images = vae.decode(latents_for_decode.float(), return_dict=False)[0]
         
-        # Convert to PIL
+        # Convert to PIL (VAE output is in [-1, 1])
         images = (images / 2 + 0.5).clamp(0, 1)
-        images = images.cpu().permute(0, 2, 3, 1).numpy()
+        images = images.cpu().permute(0, 2, 3, 1).float().numpy()
         for img_np in images:
             pil_img = Image.fromarray((img_np * 255).astype(np.uint8))
             generated.append(pil_img)
+    
+    # Switch models back to train mode
+    unet.train()
+    spatial_encoder.train()
     
     return generated
 
@@ -124,6 +140,7 @@ def run_phase2_validation(accelerator, unet, vae, spatial_encoder,
                           args, global_step, weight_dtype):
     """
     Runs conditional concat-based generation for Phase 2, computes FID, and creates visual comparison grids.
+    Uses random sampling of validation images for unbiased FID estimation.
     """
     accelerator.print(f"*** Running Phase 2 Validation at Step {global_step} ***")
     
@@ -138,26 +155,33 @@ def run_phase2_validation(accelerator, unet, vae, spatial_encoder,
         if not val_tiles_dir.exists():
             val_tiles_dir = val_dir / "images"
         val_spatial_dir = val_dir / "spatial_maps"
-        
+    
+    # Collect all valid (tile + spatial_map) pairs
+    all_pairs = []
+    for file in val_tiles_dir.glob("*.png"):
+        stem = file.stem
+        spatial_path = val_spatial_dir / f"{stem}.npz"
+        if spatial_path.exists():
+            all_pairs.append((file, spatial_path, stem))
+    
+    if len(all_pairs) == 0:
+        accelerator.print("Skipping validation: No valid pairs found.")
+        return
+    
+    # Randomly sample 2000 pairs (seeded for reproducibility across runs)
+    rng = random.Random(42)
+    num_samples = min(2000, len(all_pairs))
+    selected_pairs = rng.sample(all_pairs, num_samples)
+    accelerator.print(f"Randomly sampled {num_samples} / {len(all_pairs)} pairs for FID evaluation.")
+    
     real_images = []
     spatial_maps = []
     stems = []
-    
-    for file in sorted(val_tiles_dir.glob("*.png"))[:2000]:
-        stem = file.stem
-        spatial_path = val_spatial_dir / f"{stem}.npz"
-        
-        if not spatial_path.exists():
-            continue
-            
-        real_images.append(Image.open(file).convert("RGB"))
+    for tile_path, spatial_path, stem in selected_pairs:
+        real_images.append(Image.open(tile_path).convert("RGB"))
         spatial_data = np.load(spatial_path)
         spatial_maps.append(spatial_data['map'])
         stems.append(stem)
-
-    if len(real_images) == 0:
-        accelerator.print("Skipping validation: Incomplete triplets in validation directory.")
-        return
 
     accelerator.print(f"Generating {len(real_images)} conditional H&E tiles...")
     
@@ -197,17 +221,17 @@ def run_phase2_validation(accelerator, unet, vae, spatial_encoder,
 
     # Log image grids to Tensorboard
     if accelerator.is_main_process:
-        tracker = accelerator.get_tracker("tensorboard")
-        if tracker is not None:
-            try:
-                tensor_grids = []
-                val_out = Path(args.output_dir) / "validation_images" / f"step_{global_step}"
-                for grid_file in sorted(val_out.glob("*_compare.png"))[:16]:
-                    img = Image.open(grid_file).convert("RGB")
-                    t = T.ToTensor()(img)
-                    tensor_grids.append(t)
-                if tensor_grids:
-                    batch_tensors = torch.stack(tensor_grids)
-                    tracker.writer.add_images("val/real_vs_generated", batch_tensors, global_step)
-            except Exception as e:
-                accelerator.print(f"Could not log image grids to TB: {e}")
+        try:
+            for tracker in accelerator.trackers:
+                if tracker.name == "tensorboard":
+                    tensor_grids = []
+                    val_out = Path(args.output_dir) / "validation_images" / f"step_{global_step}"
+                    for grid_file in sorted(val_out.glob("*_compare.png"))[:16]:
+                        img = Image.open(grid_file).convert("RGB")
+                        t = T.ToTensor()(img)
+                        tensor_grids.append(t)
+                    if tensor_grids:
+                        batch_tensors = torch.stack(tensor_grids)
+                        tracker.writer.add_images("val/real_vs_generated", batch_tensors, global_step)
+        except Exception as e:
+            accelerator.print(f"Could not log image grids to TB: {e}")

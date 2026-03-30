@@ -155,7 +155,6 @@ import diffusers
 from diffusers import (
     AutoencoderKL,
     DDPMScheduler,
-    PNDMScheduler,
     UNet2DConditionModel,
 )
 from diffusers.optimization import get_scheduler
