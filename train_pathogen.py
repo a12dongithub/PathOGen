@@ -103,9 +103,11 @@ class PathOGenDataset(Dataset):
 class SpatialCondEncoder(nn.Module):
     """Downsamples 512x512x5 spatial maps to 64x64x4 latent-space features.
     
-    The final 1x1 convolution is zero-initialized so that at step 0 the
-    encoder outputs all zeros, making the model behave identically to
-    the Phase 1 baseline.
+    Uses default Kaiming initialization so the encoder outputs non-zero
+    features from step 0.  The UNet's conv_in channels 4-7 are separately
+    zero-initialized, so these features are IGNORED at step 0 (preserving
+    the Phase 1 baseline).  As conv_in learns, it gradually incorporates
+    the spatial signal — this is the same trick InstructPix2Pix uses.
     """
     def __init__(self):
         super().__init__()
@@ -118,9 +120,8 @@ class SpatialCondEncoder(nn.Module):
             nn.SiLU(),
             nn.Conv2d(128, 4, 1),                        # project to 4 channels
         )
-        # Zero-initialize the final projection
-        nn.init.zeros_(self.net[-1].weight)
-        nn.init.zeros_(self.net[-1].bias)
+        # No zero-init! Default Kaiming initialization ensures non-zero output
+        # so that conv_in channels 4-7 receive real gradients and can learn.
 
     def forward(self, x):
         return self.net(x)
