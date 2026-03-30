@@ -237,6 +237,7 @@ def main():
     spatial_encoder.train()
     global_step = 0
     losses = []
+    scaler = torch.amp.GradScaler("cuda")
 
     while global_step < args.num_steps:
         for batch in dataloader:
@@ -257,17 +258,19 @@ def main():
             timesteps = torch.randint(0, noise_scheduler.config.num_train_timesteps, (bsz,), device=device).long()
             noisy_latents = noise_scheduler.add_noise(latents, noise, timesteps)
 
-            # Forward
+            # Forward + loss inside autocast
             spatial_features = spatial_encoder(cond)
             unet_input = torch.cat([noisy_latents, spatial_features], dim=1)
 
             with torch.autocast("cuda"):
                 model_pred = unet(unet_input, timesteps, encoder_hidden_states=encoder_hidden_states, return_dict=False)[0]
+                loss = F.mse_loss(model_pred.float(), noise.float(), reduction="mean")
 
-            loss = F.mse_loss(model_pred, noise)
-            loss.backward()
+            scaler.scale(loss).backward()
+            scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(list(unet.parameters()) + list(spatial_encoder.parameters()), 1.0)
-            optimizer.step()
+            scaler.step(optimizer)
+            scaler.update()
             optimizer.zero_grad()
 
             global_step += 1
