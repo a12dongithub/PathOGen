@@ -43,10 +43,10 @@ class SpatialCondEncoder(nn.Module):
             nn.SiLU(),
             nn.Conv2d(128, 4, 1),
         )
-        # Default Kaiming init — no zero-init!
+        self.norm = nn.GroupNorm(1, 4)
 
     def forward(self, x):
-        return self.net(x)
+        return self.norm(self.net(x))
 
 # ── Dataset (same as train_pathogen.py) ──
 class MiniDataset(torch.utils.data.Dataset):

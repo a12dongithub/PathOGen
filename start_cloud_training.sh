@@ -97,8 +97,8 @@ accelerate launch --multi_gpu --num_processes=4 train_pathogen.py \
     --train_data_dir='./data' \
     --resolution=512 \
     --learning_rate=1e-5 \
-    --lr_scheduler='constant_with_warmup' \
-    --lr_warmup_steps=1000 \
+    --lr_scheduler='cosine' \
+    --lr_warmup_steps=500 \
     --train_batch_size=2 \
     --gradient_accumulation_steps=4 \
     --gradient_checkpointing \

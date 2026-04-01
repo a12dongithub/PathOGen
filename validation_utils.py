@@ -86,8 +86,9 @@ def generate_concat_conditioned(unet, vae, spatial_encoder, text_encoder, tokeni
     
     generated = []
     batch_size = 4  # Keep small for V100 32GB memory
+    num_batches = (len(spatial_maps) + batch_size - 1) // batch_size
     
-    for i in range(0, len(spatial_maps), batch_size):
+    for i in tqdm(range(0, len(spatial_maps), batch_size), total=num_batches, desc="Generating"):
         current_batch = spatial_maps[i:i+batch_size]
         bs = len(current_batch)
         

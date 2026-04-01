@@ -102,29 +102,33 @@ class PathOGenDataset(Dataset):
 
 class SpatialCondEncoder(nn.Module):
     """Downsamples 512x512x5 spatial maps to 64x64x4 latent-space features.
-    
-    Uses default Kaiming initialization so the encoder outputs non-zero
-    features from step 0.  The UNet's conv_in channels 4-7 are separately
-    zero-initialized, so these features are IGNORED at step 0 (preserving
-    the Phase 1 baseline).  As conv_in learns, it gradually incorporates
-    the spatial signal — this is the same trick InstructPix2Pix uses.
+
+    Uses GroupNorm on the output to normalize features to ~N(0,1), matching
+    the scale of noisy latents. Without this, raw encoder output is ~100x
+    smaller than the latents and gets effectively ignored by conv_in.
+
+    The UNet's conv_in channels 4-7 are separately zero-initialized, so
+    at step 0 the spatial features are IGNORED regardless of their scale
+    (preserving the Phase 1 baseline).
     """
     def __init__(self):
         super().__init__()
         self.net = nn.Sequential(
-            nn.Conv2d(5, 32, 3, stride=2, padding=1),   # 512→256
+            nn.Conv2d(5, 32, 3, stride=2, padding=1),   # 512->256
             nn.SiLU(),
-            nn.Conv2d(32, 64, 3, stride=2, padding=1),  # 256→128
+            nn.Conv2d(32, 64, 3, stride=2, padding=1),  # 256->128
             nn.SiLU(),
-            nn.Conv2d(64, 128, 3, stride=2, padding=1), # 128→64
+            nn.Conv2d(64, 128, 3, stride=2, padding=1), # 128->64
             nn.SiLU(),
             nn.Conv2d(128, 4, 1),                        # project to 4 channels
         )
-        # No zero-init! Default Kaiming initialization ensures non-zero output
-        # so that conv_in channels 4-7 receive real gradients and can learn.
+        # GroupNorm(1, 4) = InstanceNorm over all 4 channels together
+        # Normalizes output to zero-mean, unit-variance so spatial features
+        # are on the same scale as noisy latents (~std 1.0)
+        self.norm = nn.GroupNorm(1, 4)
 
     def forward(self, x):
-        return self.net(x)
+        return self.norm(self.net(x))
 
 def collate_fn(examples):
     pixel_values = torch.stack([example["pixel_values"] for example in examples])
