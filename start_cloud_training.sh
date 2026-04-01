@@ -58,7 +58,7 @@ sed -i 's/check_min_version("0.37.0.dev0")/# check_min_version("0.37.0.dev0")/g'
 # Text prompt is constant ("he") for ALL samples — the model learns
 # unconditional H&E generation, NOT text-conditioned generation.
 # Use all 8 V100 GPUs
-export CUDA_VISIBLE_DEVICES="0,1,2,3"
+export CUDA_VISIBLE_DEVICES="0,1,2,3,4,5,6,7"
 # export CUDA_VISIBLE_DEVICES="0"
 
 echo "[4/6] Phase 1: Domain adaptation (unconditional H&E generation)..."
@@ -90,7 +90,7 @@ echo "[4/6] Phase 1: Domain adaptation (unconditional H&E generation)..."
 # Full UNet + SpatialCondEncoder training at LR 1e-5.
 # FRESH START from Phase 1 checkpoint-30000 (best FID).
 echo "[5/6] Phase 2: Concat conditioning (spatial) + UNet training..."
-accelerate launch --multi_gpu --num_processes=4 train_pathogen.py \
+accelerate launch --multi_gpu --num_processes=8 train_pathogen.py \
     --pretrained_model_name_or_path='Manojb/stable-diffusion-2-1-base' \
     --phase1_unet_checkpoint='./checkpoints/phase1_domain_adapt/checkpoint-30000' \
     --output_dir='./checkpoints/phase2_concat' \
@@ -102,7 +102,7 @@ accelerate launch --multi_gpu --num_processes=4 train_pathogen.py \
     --train_batch_size=2 \
     --gradient_accumulation_steps=4 \
     --gradient_checkpointing \
-    --max_train_steps=80000 \
+    --max_train_steps=40000 \
     --checkpointing_steps=5000 \
     --use_8bit_adam \
     --allow_tf32 \
