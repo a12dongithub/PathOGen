@@ -57,9 +57,20 @@ def generate_concat_conditioned(unet, vae, spatial_encoder, text_encoder, tokeni
     Returns:
         list of PIL images
     """
-    # Use DDIM — the default inference scheduler for SD 2.1 base.
-    # PNDMScheduler produces incorrect results with SD 2.1's beta schedule.
-    scheduler = DDIMScheduler.from_config(noise_scheduler.config)
+    # Create DDIM scheduler with explicit SD 2.1 parameters.
+    # DDIMScheduler.from_config(ddpm_config) uses WRONG defaults for keys not in
+    # the DDPM config (timestep_spacing, clip_sample, etc.), inflating FID by ~36 pts.
+    scheduler = DDIMScheduler(
+        beta_start=noise_scheduler.config.beta_start,
+        beta_end=noise_scheduler.config.beta_end,
+        beta_schedule=noise_scheduler.config.beta_schedule,
+        num_train_timesteps=noise_scheduler.config.num_train_timesteps,
+        prediction_type=noise_scheduler.config.prediction_type,
+        clip_sample=False,          # SD 2.1 does NOT clip latent samples
+        set_alpha_to_one=False,     # Match SD 2.1 default
+        steps_offset=1,             # Match SD 2.1 default
+        timestep_spacing="leading", # Standard DDIM spacing
+    )
     scheduler.set_timesteps(num_inference_steps, device=device)
     
     # Switch models to eval mode for deterministic inference

@@ -974,6 +974,135 @@ def main(args):
     )
 
     image_logs = None
+
+    # ==========================================================================
+    # PRE-TRAINING SANITY CHECKS
+    # ==========================================================================
+    if accelerator.is_main_process:
+        logger.info("=" * 70)
+        logger.info("  PRE-TRAINING SANITY CHECKS")
+        logger.info("=" * 70)
+
+        _unet = unwrap_model(unet)
+        _vae = unwrap_model(vae)
+        _enc = unwrap_model(spatial_encoder)
+
+        # -- 1. Model states --
+        logger.info("[CHECK 1] Model states:")
+        unet_trainable = sum(p.requires_grad for p in _unet.parameters())
+        unet_total = sum(1 for _ in _unet.parameters())
+        enc_trainable = sum(p.requires_grad for p in _enc.parameters())
+        enc_total = sum(1 for _ in _enc.parameters())
+        vae_trainable = sum(p.requires_grad for p in _vae.parameters())
+        te_trainable = sum(p.requires_grad for p in text_encoder.parameters())
+        logger.info(f"  UNet        : {unet_trainable}/{unet_total} params trainable, training={_unet.training}")
+        logger.info(f"  SpatialEnc  : {enc_trainable}/{enc_total} params trainable, training={_enc.training}")
+        logger.info(f"  VAE         : {vae_trainable} params trainable (should be 0), training={_vae.training} (should be False)")
+        logger.info(f"  TextEncoder : {te_trainable} params trainable (should be 0)")
+        assert vae_trainable == 0, "VAE should be fully frozen!"
+        assert te_trainable == 0, "TextEncoder should be fully frozen!"
+        assert unet_trainable == unet_total, "All UNet params should be trainable!"
+        assert enc_trainable == enc_total, "All SpatialEncoder params should be trainable!"
+        logger.info("  OK: All model states correct.")
+
+        # -- 2. conv_in expansion --
+        logger.info("[CHECK 2] UNet conv_in expansion:")
+        conv_in = _unet.conv_in
+        logger.info(f"  conv_in.weight shape: {conv_in.weight.shape} (expected [320, 8, 3, 3])")
+        logger.info(f"  conv_in.bias shape:   {conv_in.bias.shape} (expected [320])")
+        ch03_norm = conv_in.weight[:, :4].norm().item()
+        ch47_norm = conv_in.weight[:, 4:].norm().item()
+        logger.info(f"  conv_in channels 0-3 weight norm: {ch03_norm:.4f} (should be non-zero)")
+        logger.info(f"  conv_in channels 4-7 weight norm: {ch47_norm:.6f} (should be ~0 at start)")
+        assert conv_in.weight.shape[1] == 8, f"conv_in should have 8 input channels, got {conv_in.weight.shape[1]}"
+        assert ch03_norm > 0.1, "conv_in channels 0-3 should have Phase 1 weights!"
+        logger.info("  OK: conv_in correctly expanded.")
+
+        # -- 3. Spatial encoder output check --
+        logger.info("[CHECK 3] SpatialCondEncoder output:")
+        dummy_spatial = torch.randn(1, 5, 512, 512, device=accelerator.device)
+        with torch.no_grad():
+            dummy_out = _enc(dummy_spatial)
+        logger.info(f"  Input shape:  {dummy_spatial.shape} (expected [1, 5, 512, 512])")
+        logger.info(f"  Output shape: {dummy_out.shape} (expected [1, 4, 64, 64])")
+        logger.info(f"  Output mean:  {dummy_out.mean().item():.6f}")
+        logger.info(f"  Output std:   {dummy_out.std().item():.6f}")
+        logger.info(f"  Output |mean|: {dummy_out.abs().mean().item():.6f}")
+        logger.info(f"  Output range: [{dummy_out.min().item():.4f}, {dummy_out.max().item():.4f}]")
+        assert dummy_out.shape == (1, 4, 64, 64), f"Wrong encoder output shape: {dummy_out.shape}"
+        assert dummy_out.abs().mean().item() > 0.001, "Encoder output is zero -- dead gradient path!"
+        logger.info("  OK: Spatial encoder produces non-zero output.")
+        del dummy_spatial, dummy_out
+
+        # -- 4. Data pipeline check --
+        logger.info("[CHECK 4] Data pipeline (first batch):")
+        test_batch = next(iter(train_dataloader))
+        pv = test_batch["pixel_values"]
+        cv = test_batch["conditioning_pixel_values"]
+        logger.info(f"  pixel_values shape: {pv.shape} (expected [B, 3, 512, 512])")
+        logger.info(f"  pixel_values range: [{pv.min():.3f}, {pv.max():.3f}] (expected [-1, 1])")
+        logger.info(f"  conditioning_pixel_values shape: {cv.shape} (expected [B, 5, 512, 512])")
+        logger.info(f"  conditioning_pixel_values range: [{cv.min():.3f}, {cv.max():.3f}] (expected [0, 1])")
+        logger.info(f"  input_ids shape: {test_batch['input_ids'].shape}")
+        assert pv.shape[1] == 3, f"pixel_values should have 3 channels, got {pv.shape[1]}"
+        assert pv.shape[2] == pv.shape[3] == 512, f"pixel_values should be 512x512"
+        assert cv.shape[1] == 5, f"conditioning should have 5 channels, got {cv.shape[1]}"
+        assert cv.shape[2] == cv.shape[3] == 512, f"conditioning should be 512x512"
+        logger.info("  OK: Data pipeline shapes and ranges correct.")
+
+        # -- 5. Full mini forward pass --
+        logger.info("[CHECK 5] Mini forward pass (1 step, no grad):")
+        with torch.no_grad():
+            pv_dev = pv.float().to(accelerator.device)
+            cv_dev = cv.to(accelerator.device, dtype=weight_dtype)
+            ids_dev = test_batch["input_ids"].to(accelerator.device)
+
+            latents_check = _vae.encode(pv_dev).latent_dist.sample() * _vae.config.scaling_factor
+            logger.info(f"  VAE latents shape: {latents_check.shape} (expected [B, 4, 64, 64])")
+            logger.info(f"  VAE latents range: [{latents_check.min():.3f}, {latents_check.max():.3f}]")
+            logger.info(f"  VAE latents std:   {latents_check.std():.3f} (expected ~1.0)")
+
+            noise_check = torch.randn_like(latents_check)
+            t_check = torch.randint(0, noise_scheduler.config.num_train_timesteps, (latents_check.shape[0],), device=accelerator.device).long()
+            noisy_check = noise_scheduler.add_noise(latents_check.float(), noise_check.float(), t_check).to(dtype=weight_dtype)
+            logger.info(f"  Noisy latents range: [{noisy_check.min():.3f}, {noisy_check.max():.3f}]")
+
+            sf_check = _enc(cv_dev)
+            logger.info(f"  Spatial features shape: {sf_check.shape} (expected [B, 4, 64, 64])")
+            logger.info(f"  Spatial features |mean|: {sf_check.abs().mean():.4f}")
+            logger.info(f"  Spatial features range: [{sf_check.min():.4f}, {sf_check.max():.4f}]")
+
+            unet_in_check = torch.cat([noisy_check, sf_check], dim=1)
+            logger.info(f"  UNet input shape: {unet_in_check.shape} (expected [B, 8, 64, 64])")
+
+            enc_hs = text_encoder(ids_dev, return_dict=False)[0]
+            pred_check = _unet(unet_in_check, t_check, encoder_hidden_states=enc_hs, return_dict=False)[0]
+            logger.info(f"  UNet output shape: {pred_check.shape} (expected [B, 4, 64, 64])")
+            logger.info(f"  UNet output range: [{pred_check.min():.3f}, {pred_check.max():.3f}]")
+
+            loss_check = F.mse_loss(pred_check.float(), noise_check.float())
+            logger.info(f"  MSE loss: {loss_check.item():.6f} (expected ~1.0 for random noise)")
+            assert pred_check.shape == latents_check.shape, "UNet output shape mismatch!"
+            logger.info("  OK: Full forward pass completed successfully.")
+
+        del pv_dev, cv_dev, ids_dev, latents_check, noise_check, noisy_check, sf_check, unet_in_check, enc_hs, pred_check
+        torch.cuda.empty_cache()
+
+        # -- 6. Scheduler config check --
+        logger.info("[CHECK 6] Scheduler configuration:")
+        logger.info(f"  Training scheduler: {noise_scheduler.__class__.__name__}")
+        logger.info(f"  prediction_type: {noise_scheduler.config.prediction_type}")
+        logger.info(f"  num_train_timesteps: {noise_scheduler.config.num_train_timesteps}")
+        logger.info(f"  beta_schedule: {noise_scheduler.config.beta_schedule}")
+        logger.info(f"  beta_start: {noise_scheduler.config.beta_start}")
+        logger.info(f"  beta_end: {noise_scheduler.config.beta_end}")
+        logger.info("  OK: Scheduler config logged.")
+
+        logger.info("=" * 70)
+        logger.info("  ALL SANITY CHECKS PASSED -- Starting training!")
+        logger.info("=" * 70)
+
+
     for epoch in range(first_epoch, args.num_train_epochs):
         for step, batch in enumerate(train_dataloader):
             with accelerator.accumulate(unet, spatial_encoder):
