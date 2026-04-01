@@ -106,7 +106,7 @@ accelerate launch --multi_gpu --num_processes=8 train_pathogen.py \
     --checkpointing_steps=5000 \
     --use_8bit_adam \
     --allow_tf32 \
-    --dataloader_num_workers=8 \
+    --dataloader_num_workers=16 \
     --report_to='tensorboard' \
     --tracker_project_name='pathogen-phase2-concat'
 
