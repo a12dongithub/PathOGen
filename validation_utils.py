@@ -47,29 +47,28 @@ def calculate_fid(real_images, generated_images, accelerator):
 @torch.no_grad()
 def generate_concat_conditioned(unet, vae, spatial_encoder, text_encoder, tokenizer,
                                  noise_scheduler, spatial_maps, device, weight_dtype,
-                                 num_inference_steps=20, seed=42):
+                                 num_inference_steps=20, seed=42, real_images=None):
     """
     Manual denoising loop for concat-conditioned UNet (no ControlNet pipeline).
-    Uses DDIM scheduler (SD 2.1 default) for correct denoising behavior.
+    Uses DDIM scheduler with explicit SD 2.1 parameters.
     
     Args:
         spatial_maps: list of numpy arrays (H, W, 5), values 0-255
+        real_images: list of PIL images (for RGB hint extraction). If None, uses default H&E colors.
     Returns:
         list of PIL images
     """
     # Create DDIM scheduler with explicit SD 2.1 parameters.
-    # DDIMScheduler.from_config(ddpm_config) uses WRONG defaults for keys not in
-    # the DDPM config (timestep_spacing, clip_sample, etc.), inflating FID by ~36 pts.
     scheduler = DDIMScheduler(
         beta_start=noise_scheduler.config.beta_start,
         beta_end=noise_scheduler.config.beta_end,
         beta_schedule=noise_scheduler.config.beta_schedule,
         num_train_timesteps=noise_scheduler.config.num_train_timesteps,
         prediction_type=noise_scheduler.config.prediction_type,
-        clip_sample=False,          # SD 2.1 does NOT clip latent samples
-        set_alpha_to_one=False,     # Match SD 2.1 default
-        steps_offset=1,             # Match SD 2.1 default
-        timestep_spacing="leading", # Standard DDIM spacing
+        clip_sample=False,
+        set_alpha_to_one=False,
+        steps_offset=1,
+        timestep_spacing="leading",
     )
     scheduler.set_timesteps(num_inference_steps, device=device)
     
@@ -92,18 +91,34 @@ def generate_concat_conditioned(unet, vae, spatial_encoder, text_encoder, tokeni
         current_batch = spatial_maps[i:i+batch_size]
         bs = len(current_batch)
         
-        # Prepare spatial conditioning (normalize 0-255 → 0-1, then encode)
+        # Prepare spatial conditioning (normalize 0-255 -> 0-1)
         spatial_tensor = torch.stack([
             torch.from_numpy(sm.astype(np.float32) / 255.0).permute(2, 0, 1)
             for sm in current_batch
-        ]).to(device, dtype=weight_dtype)
+        ]).to(device, dtype=weight_dtype)  # (bs, 5, 512, 512)
         
-        spatial_features = spatial_encoder(spatial_tensor)  # (bs, 4, 64, 64)
+        # Compute RGB hints from real images
+        if real_images is not None:
+            current_reals = real_images[i:i+batch_size]
+            rgb_means = torch.stack([
+                torch.tensor(np.array(img).astype(np.float32).mean(axis=(0, 1)) / 255.0)
+                for img in current_reals
+            ]).to(device, dtype=weight_dtype)  # (bs, 3)
+        else:
+            # Default H&E color profile (pinkish-purple)
+            rgb_means = torch.tensor([[0.7, 0.5, 0.7]]).expand(bs, -1).to(device, dtype=weight_dtype)
         
-        # Diagnostic: check if spatial encoder is outputting zeros (should be ~0 at step 0)
+        # Broadcast RGB to (bs, 3, 512, 512) and concat with spatial
+        rgb_maps = rgb_means[:, :, None, None].expand(-1, -1, 512, 512)
+        encoder_input = torch.cat([spatial_tensor, rgb_maps], dim=1)  # (bs, 8, 512, 512)
+        
+        spatial_features = spatial_encoder(encoder_input)  # (bs, 4, 64, 64)
+        
+        # Diagnostic: check if spatial encoder is outputting zeros
         if i == 0:
             feat_abs_mean = spatial_features.abs().mean().item()
             print(f"  [diag] spatial_encoder output |mean|: {feat_abs_mean:.8f}")
+            print(f"  [diag] RGB hint (first tile): R={rgb_means[0,0]:.3f} G={rgb_means[0,1]:.3f} B={rgb_means[0,2]:.3f}")
         
         # Expand text embeddings for the batch
         batch_text_embeds = text_embeds.expand(bs, -1, -1)
@@ -204,11 +219,12 @@ def run_phase2_validation(accelerator, unet, vae, spatial_encoder,
         else:
             local_reals, local_spatials, local_stems = [], [], []
         
-        # Generate images using concat-conditioned denoising loop
+        # Generate images using concat-conditioned denoising loop (with RGB hints from real tiles)
         generated_images = generate_concat_conditioned(
             unet, vae, spatial_encoder, text_encoder, tokenizer,
             noise_scheduler, list(local_spatials), accelerator.device, weight_dtype,
             num_inference_steps=20, seed=args.seed if args.seed else 42,
+            real_images=list(local_reals),
         )
         
         # Save comparison grids (main process only, first 100)

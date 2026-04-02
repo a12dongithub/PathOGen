@@ -70,6 +70,10 @@ class PathOGenDataset(Dataset):
         img = cv2.imread(img_path)
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         
+        # Compute mean RGB of this tile (0-1 range) as color hint
+        rgb_mean = img.astype(np.float32).mean(axis=(0, 1)) / 255.0  # (3,)
+        rgb_mean_tensor = torch.from_numpy(rgb_mean).float()  # (3,)
+        
         # Load Map (512x512x5)
         map_path = os.path.join(self.map_dir, f"{stem}.npz")
         spatial_map = np.load(map_path)['map'].astype(np.float32) / 255.0
@@ -96,25 +100,24 @@ class PathOGenDataset(Dataset):
         return {
             "pixel_values": img_tensor,
             "conditioning_pixel_values": map_tensor,
+            "rgb_mean": rgb_mean_tensor,
             "text": text,
             "input_ids": input_ids
         }
 
 class SpatialCondEncoder(nn.Module):
-    """Downsamples 512x512x5 spatial maps to 64x64x4 latent-space features.
+    """Downsamples 512x512x(5+3) spatial+color maps to 64x64x4 latent-space features.
+
+    Input: 8-channel tensor = 5 one-hot spatial channels + 3 RGB mean hint channels.
+    The RGB channels are constant-value maps (each pixel = mean R, G, or B of the target tile).
 
     Uses GroupNorm on the output to normalize features to ~N(0,1), matching
-    the scale of noisy latents. Without this, raw encoder output is ~100x
-    smaller than the latents and gets effectively ignored by conv_in.
-
-    The UNet's conv_in channels 4-7 are separately zero-initialized, so
-    at step 0 the spatial features are IGNORED regardless of their scale
-    (preserving the Phase 1 baseline).
+    the scale of noisy latents.
     """
     def __init__(self):
         super().__init__()
         self.net = nn.Sequential(
-            nn.Conv2d(5, 32, 3, stride=2, padding=1),   # 512->256
+            nn.Conv2d(8, 32, 3, stride=2, padding=1),   # 512->256  (5 spatial + 3 RGB)
             nn.SiLU(),
             nn.Conv2d(32, 64, 3, stride=2, padding=1),  # 256->128
             nn.SiLU(),
@@ -133,12 +136,14 @@ class SpatialCondEncoder(nn.Module):
 def collate_fn(examples):
     pixel_values = torch.stack([example["pixel_values"] for example in examples])
     pipeline_cond = torch.stack([example["conditioning_pixel_values"] for example in examples])
+    rgb_means = torch.stack([example["rgb_mean"] for example in examples])  # (B, 3)
     text = [example["text"] for example in examples]
     input_ids = torch.stack([example["input_ids"] for example in examples])
     
     return {
         "pixel_values": pixel_values,
         "conditioning_pixel_values": pipeline_cond,
+        "rgb_mean": rgb_means,
         "text": text,
         "input_ids": input_ids
     }
@@ -1025,10 +1030,10 @@ def main(args):
 
     # -- 3. Spatial encoder output check --
     _log("[CHECK 3] SpatialCondEncoder output:")
-    dummy_spatial = torch.randn(1, 5, 512, 512, device=accelerator.device)
+    dummy_spatial = torch.randn(1, 8, 512, 512, device=accelerator.device)  # 5 spatial + 3 RGB
     with torch.no_grad():
         dummy_out = _enc(dummy_spatial)
-    _log(f"  Input shape:  {dummy_spatial.shape} (expected [1, 5, 512, 512])")
+    _log(f"  Input shape:  {dummy_spatial.shape} (expected [1, 8, 512, 512])")
     _log(f"  Output shape: {dummy_out.shape} (expected [1, 4, 64, 64])")
     _log(f"  Output mean:  {dummy_out.mean().item():.6f}")
     _log(f"  Output std:   {dummy_out.std().item():.6f}")
@@ -1061,6 +1066,7 @@ def main(args):
         pv_dev = pv.float().to(accelerator.device)
         cv_dev = cv.to(accelerator.device, dtype=weight_dtype)
         ids_dev = test_batch["input_ids"].to(accelerator.device)
+        rgb_dev = test_batch["rgb_mean"].to(accelerator.device, dtype=weight_dtype)  # (B, 3)
 
         latents_check = _vae.encode(pv_dev).latent_dist.sample() * _vae.config.scaling_factor
         _log(f"  VAE latents shape: {latents_check.shape} (expected [B, 4, 64, 64])")
@@ -1072,7 +1078,13 @@ def main(args):
         noisy_check = noise_scheduler.add_noise(latents_check.float(), noise_check.float(), t_check).to(dtype=weight_dtype)
         _log(f"  Noisy latents range: [{noisy_check.min():.3f}, {noisy_check.max():.3f}]")
 
-        sf_check = _enc(cv_dev)
+        # Build 8-channel encoder input (5 spatial + 3 RGB hint)
+        rgb_maps_check = rgb_dev[:, :, None, None].expand(-1, -1, 512, 512)
+        enc_input_check = torch.cat([cv_dev, rgb_maps_check], dim=1)  # (B, 8, 512, 512)
+        _log(f"  Encoder input shape: {enc_input_check.shape} (expected [B, 8, 512, 512])")
+        _log(f"  RGB hint values: {rgb_dev[0].tolist()} (mean R,G,B of first tile)")
+
+        sf_check = _enc(enc_input_check)
         _log(f"  Spatial features shape: {sf_check.shape} (expected [B, 4, 64, 64])")
         _log(f"  Spatial features |mean|: {sf_check.abs().mean():.4f}")
         _log(f"  Spatial features std:    {sf_check.std():.4f} (should be ~1.0 with GroupNorm)")
@@ -1132,9 +1144,21 @@ def main(args):
                 # Get the text embedding for conditioning
                 encoder_hidden_states = text_encoder(batch["input_ids"], return_dict=False)[0]
 
-                # Encode spatial map to latent-sized features and concat with noisy latents
-                spatial_cond = batch["conditioning_pixel_values"].to(dtype=weight_dtype)
-                spatial_features = spatial_encoder(spatial_cond)  # 512x512x5 → 64x64x4
+                # Build encoder input: 5-ch spatial map + 3-ch RGB mean hint
+                spatial_cond = batch["conditioning_pixel_values"].to(dtype=weight_dtype)  # (B,5,512,512)
+                rgb_mean = batch["rgb_mean"].to(dtype=weight_dtype)  # (B, 3)
+                
+                # RGB dropout: 20% of the time, zero out RGB hints
+                # Forces the model to also learn color from context, not just the hint
+                if torch.rand(1).item() < 0.2:
+                    rgb_mean = torch.zeros_like(rgb_mean)
+                
+                # Broadcast RGB means to (B, 3, 512, 512) constant maps
+                rgb_maps = rgb_mean[:, :, None, None].expand(-1, -1, 512, 512)
+                
+                # Concat spatial (5ch) + RGB hint (3ch) → 8ch encoder input
+                encoder_input = torch.cat([spatial_cond, rgb_maps], dim=1)  # (B, 8, 512, 512)
+                spatial_features = spatial_encoder(encoder_input)  # 512x512x8 -> 64x64x4
                 unet_input = torch.cat([noisy_latents, spatial_features], dim=1)  # 64x64x8
 
                 # Predict the noise residual
