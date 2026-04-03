@@ -45,16 +45,17 @@ def calculate_fid(real_images, generated_images, accelerator):
 
 
 @torch.no_grad()
-def generate_concat_conditioned(unet, vae, spatial_encoder, text_encoder, tokenizer,
-                                 noise_scheduler, spatial_maps, device, weight_dtype,
-                                 num_inference_steps=20, seed=42, real_images=None):
+def generate_controlnet_conditioned(unet, vae, controlnet, text_encoder, tokenizer,
+                                     noise_scheduler, spatial_maps, device, weight_dtype,
+                                     num_inference_steps=20, seed=42):
     """
-    Manual denoising loop for concat-conditioned UNet (no ControlNet pipeline).
-    Uses DDIM scheduler with explicit SD 2.1 parameters.
+    Manual denoising loop using ControlNet for spatial conditioning.
+    ControlNet processes spatial maps at pixel resolution and injects features
+    at multiple UNet levels via residual connections.
+    UNet conv_in stays at 4 channels (untouched).
     
     Args:
         spatial_maps: list of numpy arrays (H, W, 5), values 0-255
-        real_images: list of PIL images (for RGB hint extraction). If None, uses default H&E colors.
     Returns:
         list of PIL images
     """
@@ -74,7 +75,7 @@ def generate_concat_conditioned(unet, vae, spatial_encoder, text_encoder, tokeni
     
     # Switch models to eval mode for deterministic inference
     unet.eval()
-    spatial_encoder.eval()
+    controlnet.eval()
     
     # Encode text (constant "he" prompt)
     text_inputs = tokenizer(
@@ -97,29 +98,6 @@ def generate_concat_conditioned(unet, vae, spatial_encoder, text_encoder, tokeni
             for sm in current_batch
         ]).to(device, dtype=weight_dtype)  # (bs, 5, 512, 512)
         
-        # Compute RGB hints from real images
-        if real_images is not None:
-            current_reals = real_images[i:i+batch_size]
-            rgb_means = torch.stack([
-                torch.tensor(np.array(img).astype(np.float32).mean(axis=(0, 1)) / 255.0)
-                for img in current_reals
-            ]).to(device, dtype=weight_dtype)  # (bs, 3)
-        else:
-            # Default H&E color profile (pinkish-purple)
-            rgb_means = torch.tensor([[0.7, 0.5, 0.7]]).expand(bs, -1).to(device, dtype=weight_dtype)
-        
-        # Broadcast RGB to (bs, 3, 512, 512) and concat with spatial
-        rgb_maps = rgb_means[:, :, None, None].expand(-1, -1, 512, 512)
-        encoder_input = torch.cat([spatial_tensor, rgb_maps], dim=1)  # (bs, 8, 512, 512)
-        
-        spatial_features = spatial_encoder(encoder_input)  # (bs, 4, 64, 64)
-        
-        # Diagnostic: check if spatial encoder is outputting zeros
-        if i == 0:
-            feat_abs_mean = spatial_features.abs().mean().item()
-            print(f"  [diag] spatial_encoder output |mean|: {feat_abs_mean:.8f}")
-            print(f"  [diag] RGB hint (first tile): R={rgb_means[0,0]:.3f} G={rgb_means[0,1]:.3f} B={rgb_means[0,2]:.3f}")
-        
         # Expand text embeddings for the batch
         batch_text_embeds = text_embeds.expand(bs, -1, -1)
         
@@ -132,13 +110,21 @@ def generate_concat_conditioned(unet, vae, spatial_encoder, text_encoder, tokeni
         for t in scheduler.timesteps:
             latent_model_input = scheduler.scale_model_input(latents, t)
             
-            # Concat spatial features with noisy latents
-            unet_input = torch.cat([latent_model_input, spatial_features], dim=1)  # (bs, 8, 64, 64)
-            
             with torch.autocast("cuda", dtype=weight_dtype):
-                noise_pred = unet(
-                    unet_input, t,
+                # ControlNet: spatial maps at pixel resolution → residuals
+                down_block_res_samples, mid_block_res_sample = controlnet(
+                    latent_model_input, t,
                     encoder_hidden_states=batch_text_embeds,
+                    controlnet_cond=spatial_tensor,
+                    return_dict=False,
+                )
+                
+                # UNet: standard 4-channel input + ControlNet residuals
+                noise_pred = unet(
+                    latent_model_input, t,  # 4-channel, NO concat
+                    encoder_hidden_states=batch_text_embeds,
+                    down_block_additional_residuals=[s.clone() for s in down_block_res_samples],
+                    mid_block_additional_residual=mid_block_res_sample.clone(),
                     return_dict=False,
                 )[0]
             
@@ -157,16 +143,16 @@ def generate_concat_conditioned(unet, vae, spatial_encoder, text_encoder, tokeni
     
     # Switch models back to train mode
     unet.train()
-    spatial_encoder.train()
+    controlnet.train()
     
     return generated
 
 
-def run_phase2_validation(accelerator, unet, vae, spatial_encoder,
+def run_phase2_validation(accelerator, unet, vae, controlnet,
                           text_encoder, tokenizer, noise_scheduler,
                           args, global_step, weight_dtype):
     """
-    Runs conditional concat-based generation for Phase 2, computes FID, and creates visual comparison grids.
+    Runs ControlNet-conditioned generation for Phase 2v2, computes FID, and creates visual comparison grids.
     Uses random sampling of validation images for unbiased FID estimation.
     """
     accelerator.print(f"*** Running Phase 2 Validation at Step {global_step} ***")
@@ -219,12 +205,11 @@ def run_phase2_validation(accelerator, unet, vae, spatial_encoder,
         else:
             local_reals, local_spatials, local_stems = [], [], []
         
-        # Generate images using concat-conditioned denoising loop (with RGB hints from real tiles)
-        generated_images = generate_concat_conditioned(
-            unet, vae, spatial_encoder, text_encoder, tokenizer,
+        # Generate images using ControlNet-conditioned denoising loop
+        generated_images = generate_controlnet_conditioned(
+            unet, vae, controlnet, text_encoder, tokenizer,
             noise_scheduler, list(local_spatials), accelerator.device, weight_dtype,
             num_inference_steps=20, seed=args.seed if args.seed else 42,
-            real_images=list(local_reals),
         )
         
         # Save comparison grids (main process only, first 100)

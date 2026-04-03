@@ -84,19 +84,20 @@ echo "[4/6] Phase 1: Domain adaptation (unconditional H&E generation)..."
 #     --report_to='tensorboard' \
 #     --tracker_project_name='pathogen-phase1'
 
-# ── 4. Phase 2: Concat Conditioning (Direct spatial map input to UNet) ──
-# Spatial maps are encoded to latent size by a small CNN and concatenated
-# with the noisy latents as extra UNet input channels (4→8 ch conv_in).
-# Full UNet + SpatialCondEncoder training at LR 1e-5.
-# FRESH START from Phase 1 checkpoint-30000 (best FID).
-echo "[5/6] Phase 2: Concat conditioning (spatial) + UNet training..."
+# ── 4. Phase 2v2: ControlNet + Unfrozen UNet ──
+# ControlNet processes spatial maps at pixel resolution (512x512, 5 channels).
+# Injects features at multiple UNet levels via residual connections.
+# UNet conv_in stays at 4 channels — preserves Phase 1 color quality.
+# Differential LR: ControlNet=1e-5 (learning), UNet=1e-6 (fine-tuning).
+echo "[5/6] Phase 2v2: ControlNet + Unfrozen UNet training..."
 accelerate launch --multi_gpu --num_processes=8 train_pathogen.py \
     --pretrained_model_name_or_path='Manojb/stable-diffusion-2-1-base' \
     --phase1_unet_checkpoint='./checkpoints/phase1_domain_adapt/checkpoint-30000' \
-    --output_dir='./checkpoints/phase2_concat' \
+    --output_dir='./checkpoints/phase2_controlnet_v2' \
     --train_data_dir='./data' \
     --resolution=512 \
     --learning_rate=1e-5 \
+    --unet_learning_rate=1e-6 \
     --lr_scheduler='cosine' \
     --lr_warmup_steps=500 \
     --train_batch_size=2 \
@@ -106,11 +107,12 @@ accelerate launch --multi_gpu --num_processes=8 train_pathogen.py \
     --checkpointing_steps=5000 \
     --use_8bit_adam \
     --allow_tf32 \
-    --dataloader_num_workers=16 \
+    --dataloader_num_workers=2 \
     --report_to='tensorboard' \
-    --tracker_project_name='pathogen-phase2-concat'
+    --tracker_project_name='pathogen-phase2-controlnet-v2'
 
 echo "[6/6] Training complete! Checkpoints saved to ./checkpoints/"
 echo "  Phase 1: ./checkpoints/phase1_domain_adapt/"
-echo "  Phase 2: ./checkpoints/phase2_concat/"
+echo "  Phase 2: ./checkpoints/phase2_controlnet_v2/"
 echo "  TensorBoard logs: tensorboard --logdir ./checkpoints/"
+
