@@ -9,6 +9,7 @@ from PIL import Image
 from torchmetrics.image.fid import FrechetInceptionDistance
 import torchvision.transforms as T
 from diffusers import DDIMScheduler
+from diffusers import StableDiffusionPipeline, UNet2DConditionModel
 from diffusers.utils import make_image_grid
 
 # === Monkey Patch PyTorch CUDA Linalg to Bypass Missing Nightly Library ===
@@ -44,18 +45,112 @@ def calculate_fid(real_images, generated_images, accelerator):
     return fid.compute().item()
 
 
+def _collect_validation_pairs(args, accelerator):
+    val_dir = Path(args.train_data_dir).parent / "data_val"
+    val_tiles_dir = val_dir / "tiles"
+    val_spatial_dir = val_dir / "spatial_maps"
+
+    if not val_tiles_dir.exists():
+        accelerator.print(f"Validation dir {val_tiles_dir} not found. Falling back to training data subset.")
+        val_dir = Path(args.train_data_dir)
+        val_tiles_dir = val_dir / "tiles"
+        if not val_tiles_dir.exists():
+            val_tiles_dir = val_dir / "images"
+        val_spatial_dir = val_dir / "spatial_maps"
+
+    all_pairs = []
+    for file in val_tiles_dir.glob("*.png"):
+        stem = file.stem
+        spatial_path = val_spatial_dir / f"{stem}.npz"
+        if spatial_path.exists():
+            all_pairs.append((file, spatial_path, stem))
+
+    return all_pairs
+
+
 @torch.no_grad()
-def generate_controlnet_conditioned(unet, vae, controlnet, text_encoder, tokenizer,
-                                     noise_scheduler, spatial_maps, device, weight_dtype,
-                                     num_inference_steps=20, seed=42):
+def run_phase1_validation(accelerator, args, global_step, num_images=2000, batch_size=16):
     """
-    Manual denoising loop using ControlNet for spatial conditioning.
-    ControlNet processes spatial maps at pixel resolution and injects features
-    at multiple UNet levels via residual connections.
-    UNet conv_in stays at 4 channels (untouched).
+    Evaluate the Phase 1 UNet checkpoint on the validation split using unconditional
+    generation with the fixed prompt "he". This runs on the main process only so the
+    reported FID corresponds to one exact sampled set.
+    """
+    if not args.phase1_unet_checkpoint:
+        accelerator.print("Skipping Phase 1 validation: no phase1 checkpoint provided.")
+        return
+
+    all_pairs = _collect_validation_pairs(args, accelerator)
+    if len(all_pairs) == 0:
+        accelerator.print("Skipping Phase 1 validation: no valid evaluation tiles found.")
+        return
+
+    rng = random.Random(42)
+    selected_pairs = rng.sample(all_pairs, min(num_images, len(all_pairs)))
+
+    accelerator.print(f"*** Running Phase 1 Validation at Step {global_step} ***")
+    accelerator.print(f"Randomly sampled {len(selected_pairs)} validation tiles for Phase 1 FID.")
+
+    phase1_unet = UNet2DConditionModel.from_pretrained(
+        args.phase1_unet_checkpoint,
+        subfolder="unet",
+        torch_dtype=torch.float16,
+    )
+    pipeline = StableDiffusionPipeline.from_pretrained(
+        args.pretrained_model_name_or_path,
+        unet=phase1_unet,
+        torch_dtype=torch.float16,
+        safety_checker=None,
+    ).to(accelerator.device)
+    pipeline.set_progress_bar_config(disable=True)
+
+    dataset = [(tile_path, stem) for tile_path, _, stem in selected_pairs]
+    with accelerator.split_between_processes(dataset) as local_dataset:
+        if len(local_dataset) > 0:
+            local_tile_paths, local_stems = zip(*local_dataset)
+        else:
+            local_tile_paths, local_stems = [], []
+
+        local_real_images = [Image.open(tile_path).convert("RGB") for tile_path in local_tile_paths]
+        base_seed = args.seed if args.seed is not None else 42
+        generator = torch.Generator(device=accelerator.device).manual_seed(base_seed + accelerator.process_index * 100000)
+        generated_images = []
+        for i in tqdm(range(0, len(local_real_images), batch_size), desc="Phase1 generation", disable=not accelerator.is_local_main_process):
+            current_batch_size = min(batch_size, len(local_real_images) - i)
+            prompts = ["he"] * current_batch_size
+            with torch.autocast("cuda", dtype=torch.float16):
+                outputs = pipeline(prompts, num_inference_steps=20, generator=generator).images
+            generated_images.extend(outputs)
+
+        if accelerator.is_main_process:
+            phase1_out = Path(args.output_dir) / "validation_phase1_images" / f"step_{global_step}"
+            phase1_out.mkdir(parents=True, exist_ok=True)
+            for idx, image in enumerate(generated_images[:100]):
+                image.save(phase1_out / f"{local_stems[idx]}_phase1.png")
+                grid = make_image_grid([local_real_images[idx], image], rows=1, cols=2)
+                grid.save(phase1_out / f"{local_stems[idx]}_phase1_compare.png")
+
+        fid_score = calculate_fid(local_real_images, generated_images, accelerator)
+        if accelerator.is_main_process:
+            accelerator.print(f"--> Phase 1 FID at Step {global_step}: {fid_score:.4f}")
+            accelerator.log({"val/phase1_fid": fid_score}, step=global_step)
+
+    del pipeline
+    del phase1_unet
+    torch.cuda.empty_cache()
+    accelerator.wait_for_everyone()
+
+
+@torch.no_grad()
+def generate_concat_conditioned(unet, vae, spatial_encoder, text_encoder, tokenizer,
+                                 noise_scheduler, spatial_maps, device, weight_dtype,
+                                 num_inference_steps=20, seed=42, real_images=None):
+    """
+    Manual denoising loop for concat-conditioned UNet (no ControlNet pipeline).
+    Uses DDIM scheduler with explicit SD 2.1 parameters.
     
     Args:
         spatial_maps: list of numpy arrays (H, W, 5), values 0-255
+        real_images: list of PIL images (for RGB hint extraction). If None, uses default H&E colors.
     Returns:
         list of PIL images
     """
@@ -75,7 +170,7 @@ def generate_controlnet_conditioned(unet, vae, controlnet, text_encoder, tokeniz
     
     # Switch models to eval mode for deterministic inference
     unet.eval()
-    controlnet.eval()
+    spatial_encoder.eval()
     
     # Encode text (constant "he" prompt)
     text_inputs = tokenizer(
@@ -98,11 +193,45 @@ def generate_controlnet_conditioned(unet, vae, controlnet, text_encoder, tokeniz
             for sm in current_batch
         ]).to(device, dtype=weight_dtype)  # (bs, 5, 512, 512)
         
+        # Compute stain-stat hints from real images
+        if real_images is not None:
+            current_reals = real_images[i:i+batch_size]
+            stain_stats = torch.stack([
+                torch.tensor(
+                    np.concatenate(
+                        [
+                            np.array(img).astype(np.float32).mean(axis=(0, 1)) / 255.0,
+                            np.array(img).astype(np.float32).std(axis=(0, 1)) / 255.0,
+                        ],
+                        axis=0,
+                    )
+                )
+                for img in current_reals
+            ]).to(device, dtype=weight_dtype)  # (bs, 6)
+        else:
+            # Default H&E stain profile: RGB mean followed by RGB std.
+            stain_stats = torch.tensor([[0.7, 0.5, 0.7, 0.15, 0.12, 0.15]]).expand(bs, -1).to(device, dtype=weight_dtype)
+        
+        # Broadcast stain stats to (bs, 6, 512, 512) and concat with spatial
+        stain_maps = stain_stats[:, :, None, None].expand(-1, -1, 512, 512)
+        encoder_input = torch.cat([spatial_tensor, stain_maps], dim=1)  # (bs, 11, 512, 512)
+        
+        spatial_features = spatial_encoder(encoder_input)  # (bs, 4, 64, 64)
+        
+        # Diagnostic: check if spatial encoder is outputting zeros
+        if i == 0:
+            feat_abs_mean = spatial_features.abs().mean().item()
+            print(f"  [diag] spatial_encoder output |mean|: {feat_abs_mean:.8f}")
+            print(f"  [diag] stain stats (first tile): {stain_stats[0].tolist()}")
+        
         # Expand text embeddings for the batch
         batch_text_embeds = text_embeds.expand(bs, -1, -1)
         
         # Start from random noise  
-        generator = torch.Generator(device=device).manual_seed(seed + i)
+        process_seed = seed + i
+        if torch.distributed.is_available() and torch.distributed.is_initialized():
+            process_seed += torch.distributed.get_rank() * 100000
+        generator = torch.Generator(device=device).manual_seed(process_seed)
         latents = torch.randn(bs, 4, 64, 64, generator=generator, device=device, dtype=weight_dtype)
         latents = latents * scheduler.init_noise_sigma
         
@@ -110,21 +239,13 @@ def generate_controlnet_conditioned(unet, vae, controlnet, text_encoder, tokeniz
         for t in scheduler.timesteps:
             latent_model_input = scheduler.scale_model_input(latents, t)
             
+            # Concat spatial features with noisy latents
+            unet_input = torch.cat([latent_model_input, spatial_features], dim=1)  # (bs, 8, 64, 64)
+            
             with torch.autocast("cuda", dtype=weight_dtype):
-                # ControlNet: spatial maps at pixel resolution → residuals
-                down_block_res_samples, mid_block_res_sample = controlnet(
-                    latent_model_input, t,
-                    encoder_hidden_states=batch_text_embeds,
-                    controlnet_cond=spatial_tensor,
-                    return_dict=False,
-                )
-                
-                # UNet: standard 4-channel input + ControlNet residuals
                 noise_pred = unet(
-                    latent_model_input, t,  # 4-channel, NO concat
+                    unet_input, t,
                     encoder_hidden_states=batch_text_embeds,
-                    down_block_additional_residuals=[s.clone() for s in down_block_res_samples],
-                    mid_block_additional_residual=mid_block_res_sample.clone(),
                     return_dict=False,
                 )[0]
             
@@ -143,93 +264,59 @@ def generate_controlnet_conditioned(unet, vae, controlnet, text_encoder, tokeniz
     
     # Switch models back to train mode
     unet.train()
-    controlnet.train()
+    spatial_encoder.train()
     
     return generated
 
 
-def run_phase2_validation(accelerator, unet, vae, controlnet,
+def run_phase2_validation(accelerator, unet, vae, spatial_encoder,
                           text_encoder, tokenizer, noise_scheduler,
                           args, global_step, weight_dtype):
     """
-    Runs ControlNet-conditioned generation for Phase 2v2, computes FID, and creates visual comparison grids.
+    Runs conditional concat-based generation for Phase 2, computes FID, and creates visual comparison grids.
     Uses random sampling of validation images for unbiased FID estimation.
     """
     accelerator.print(f"*** Running Phase 2 Validation at Step {global_step} ***")
-    
-    val_dir = Path(args.train_data_dir).parent / "data_val"
-    val_tiles_dir = val_dir / "tiles"
-    val_spatial_dir = val_dir / "spatial_maps"
-    
-    if not val_tiles_dir.exists():
-        accelerator.print(f"Validation dir {val_tiles_dir} not found. Falling back to training data subset.")
-        val_dir = Path(args.train_data_dir)
-        val_tiles_dir = val_dir / "tiles"
-        if not val_tiles_dir.exists():
-            val_tiles_dir = val_dir / "images"
-        val_spatial_dir = val_dir / "spatial_maps"
-    
-    # Collect all valid (tile + spatial_map) pairs
-    all_pairs = []
-    for file in val_tiles_dir.glob("*.png"):
-        stem = file.stem
-        spatial_path = val_spatial_dir / f"{stem}.npz"
-        if spatial_path.exists():
-            all_pairs.append((file, spatial_path, stem))
-    
+
+    all_pairs = _collect_validation_pairs(args, accelerator)
     if len(all_pairs) == 0:
         accelerator.print("Skipping validation: No valid pairs found.")
         return
-    
-    # Randomly sample 2000 pairs (seeded for reproducibility across runs)
+
     rng = random.Random(42)
     num_samples = min(2000, len(all_pairs))
     selected_pairs = rng.sample(all_pairs, num_samples)
     accelerator.print(f"Randomly sampled {num_samples} / {len(all_pairs)} pairs for FID evaluation.")
     
-    real_images = []
-    spatial_maps = []
-    stems = []
-    for tile_path, spatial_path, stem in selected_pairs:
-        real_images.append(Image.open(tile_path).convert("RGB"))
-        spatial_data = np.load(spatial_path)
-        spatial_maps.append(spatial_data['map'])
-        stems.append(stem)
+    accelerator.print(f"Generating {len(selected_pairs)} conditional H&E tiles...")
 
-    accelerator.print(f"Generating {len(real_images)} conditional H&E tiles...")
-    
-    dataset = list(zip(real_images, spatial_maps, stems))
+    dataset = selected_pairs
     with accelerator.split_between_processes(dataset) as local_dataset:
         if len(local_dataset) > 0:
-            local_reals, local_spatials, local_stems = zip(*local_dataset)
+            local_tile_paths, local_spatial_paths, local_stems = zip(*local_dataset)
         else:
-            local_reals, local_spatials, local_stems = [], [], []
-        
-        # Generate images using ControlNet-conditioned denoising loop
-        generated_images = generate_controlnet_conditioned(
-            unet, vae, controlnet, text_encoder, tokenizer,
-            noise_scheduler, list(local_spatials), accelerator.device, weight_dtype,
+            local_tile_paths, local_spatial_paths, local_stems = [], [], []
+
+        local_real_images = [Image.open(tile_path).convert("RGB") for tile_path in local_tile_paths]
+        local_spatial_maps = [np.load(spatial_path)["map"] for spatial_path in local_spatial_paths]
+
+        generated_images = generate_concat_conditioned(
+            unet, vae, spatial_encoder, text_encoder, tokenizer,
+            noise_scheduler, local_spatial_maps, accelerator.device, weight_dtype,
             num_inference_steps=20, seed=args.seed if args.seed else 42,
+            real_images=local_real_images,
         )
-        
-        # Save comparison grids (main process only, first 100)
+
         if accelerator.is_main_process:
             val_out = Path(args.output_dir) / "validation_images" / f"step_{global_step}"
             val_out.mkdir(parents=True, exist_ok=True)
-            for j, out in enumerate(generated_images):
-                if j < 100:
-                    grid = make_image_grid([local_reals[j], out], rows=1, cols=2)
-                    grid.save(val_out / f"{local_stems[j]}_compare.png")
+            for j, out in enumerate(generated_images[:100]):
+                grid = make_image_grid([local_real_images[j], out], rows=1, cols=2)
+                grid.save(val_out / f"{local_stems[j]}_compare.png")
 
-        # Calculate FID
-        accelerator.wait_for_everyone()
+        fid_score = calculate_fid(local_real_images, generated_images, accelerator)
         if accelerator.is_main_process:
-            accelerator.print("Computing FID across all GPUs...")
-            
-        fid_score = calculate_fid(list(local_reals), generated_images, accelerator)
-        
-        if accelerator.is_main_process:
-            accelerator.print(f"--> FID Score at Step {global_step}: {fid_score:.4f}")
+            accelerator.print(f"--> Phase 2 FID at Step {global_step}: {fid_score:.4f}")
             accelerator.log({"val/fid": fid_score}, step=global_step)
 
     # Log image grids to Tensorboard
@@ -248,3 +335,5 @@ def run_phase2_validation(accelerator, unet, vae, controlnet,
                         tracker.writer.add_images("val/real_vs_generated", batch_tensors, global_step)
         except Exception as e:
             accelerator.print(f"Could not log image grids to TB: {e}")
+
+    accelerator.wait_for_everyone()
