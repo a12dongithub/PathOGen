@@ -1,7 +1,7 @@
 #!/bin/bash
 # PathOGen Cloud Training (Conda)
 # Target: 8x NVIDIA Tesla V100 32GB, ~1M H&E tiles
-# Experiment: UNet + VAE + ControlNet (no FiLM/morphology)
+# Experiment: Spatial concat conditioning + 16D morphology FiLM
 
 set -e  # Exit on first error
 
@@ -89,7 +89,7 @@ echo "[4/6] Phase 1: Domain adaptation (unconditional H&E generation)..."
 # with the noisy latents as extra UNet input channels (4→8 ch conv_in).
 # Full UNet + SpatialCondEncoder training at LR 1e-5.
 # FRESH START from Phase 1 checkpoint-30000 (best FID).
-echo "[5/6] Phase 2: Concat conditioning (spatial) + UNet training..."
+echo "[5/6] Phase 2: Spatial concat conditioning + 16D morphology FiLM..."
 accelerate launch --multi_gpu --num_processes=8 train_pathogen.py \
     --pretrained_model_name_or_path='Manojb/stable-diffusion-2-1-base' \
     --phase1_unet_checkpoint='./checkpoints/phase1_domain_adapt/checkpoint-30000' \
@@ -104,13 +104,13 @@ accelerate launch --multi_gpu --num_processes=8 train_pathogen.py \
     --train_batch_size=2 \
     --gradient_accumulation_steps=4 \
     --gradient_checkpointing \
-    --max_train_steps=40000 \
+    --max_train_steps=50000 \
     --checkpointing_steps=5000 \
     --use_8bit_adam \
     --allow_tf32 \
     --dataloader_num_workers=2 \
     --report_to='tensorboard' \
-    --tracker_project_name='pathogen-phase2-concat'
+    --tracker_project_name='pathogen-phase2-morphfilm'
 
 echo "[6/6] Training complete! Checkpoints saved to ./checkpoints/"
 echo "  Phase 1: ./checkpoints/phase1_domain_adapt/"

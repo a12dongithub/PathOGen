@@ -3,6 +3,7 @@ import random
 import torch
 import numpy as np
 import cv2
+import pandas as pd
 from pathlib import Path
 from tqdm import tqdm
 from PIL import Image
@@ -65,7 +66,19 @@ def _collect_validation_pairs(args, accelerator):
         if spatial_path.exists():
             all_pairs.append((file, spatial_path, stem))
 
-    return all_pairs
+    return all_pairs, val_dir
+
+
+def _load_morph_df(val_dir, args):
+    candidate_paths = [
+        val_dir / "morphology_stats.parquet",
+        val_dir / "morphology_features" / "morphology_stats.parquet",
+        Path(args.train_data_dir) / "morphology_features" / "morphology_stats.parquet",
+    ]
+    for path in candidate_paths:
+        if path.exists():
+            return pd.read_parquet(path)
+    raise FileNotFoundError("Could not find morphology_stats.parquet for validation.")
 
 
 @torch.no_grad()
@@ -79,7 +92,7 @@ def run_phase1_validation(accelerator, args, global_step, num_images=2000, batch
         accelerator.print("Skipping Phase 1 validation: no phase1 checkpoint provided.")
         return
 
-    all_pairs = _collect_validation_pairs(args, accelerator)
+    all_pairs, _ = _collect_validation_pairs(args, accelerator)
     if len(all_pairs) == 0:
         accelerator.print("Skipping Phase 1 validation: no valid evaluation tiles found.")
         return
@@ -124,7 +137,10 @@ def run_phase1_validation(accelerator, args, global_step, num_images=2000, batch
         if accelerator.is_main_process:
             phase1_out = Path(args.output_dir) / "validation_phase1_images" / f"step_{global_step}"
             phase1_out.mkdir(parents=True, exist_ok=True)
-            for idx, image in enumerate(generated_images[:100]):
+            sample_count = min(100, len(generated_images))
+            sampled_indices = random.Random(42 + global_step).sample(range(len(generated_images)), sample_count)
+            for idx in sampled_indices:
+                image = generated_images[idx]
                 image.save(phase1_out / f"{local_stems[idx]}_phase1.png")
                 grid = make_image_grid([local_real_images[idx], image], rows=1, cols=2)
                 grid.save(phase1_out / f"{local_stems[idx]}_phase1_compare.png")
@@ -142,15 +158,15 @@ def run_phase1_validation(accelerator, args, global_step, num_images=2000, batch
 
 @torch.no_grad()
 def generate_concat_conditioned(unet, vae, spatial_encoder, text_encoder, tokenizer,
-                                 noise_scheduler, spatial_maps, device, weight_dtype,
-                                 num_inference_steps=20, seed=42, real_images=None):
+                                 noise_scheduler, spatial_maps, morph_vectors, device, weight_dtype,
+                                 num_inference_steps=20, seed=42):
     """
     Manual denoising loop for concat-conditioned UNet (no ControlNet pipeline).
     Uses DDIM scheduler with explicit SD 2.1 parameters.
     
     Args:
         spatial_maps: list of numpy arrays (H, W, 5), values 0-255
-        real_images: list of PIL images (for RGB hint extraction). If None, uses default H&E colors.
+        morph_vectors: list of 16D morphology vectors aligned with the spatial maps.
     Returns:
         list of PIL images
     """
@@ -193,36 +209,18 @@ def generate_concat_conditioned(unet, vae, spatial_encoder, text_encoder, tokeni
             for sm in current_batch
         ]).to(device, dtype=weight_dtype)  # (bs, 5, 512, 512)
         
-        # Compute stain-stat hints from real images
-        if real_images is not None:
-            current_reals = real_images[i:i+batch_size]
-            stain_stats = torch.stack([
-                torch.tensor(
-                    np.concatenate(
-                        [
-                            np.array(img).astype(np.float32).mean(axis=(0, 1)) / 255.0,
-                            np.array(img).astype(np.float32).std(axis=(0, 1)) / 255.0,
-                        ],
-                        axis=0,
-                    )
-                )
-                for img in current_reals
-            ]).to(device, dtype=weight_dtype)  # (bs, 6)
-        else:
-            # Default H&E stain profile: RGB mean followed by RGB std.
-            stain_stats = torch.tensor([[0.7, 0.5, 0.7, 0.15, 0.12, 0.15]]).expand(bs, -1).to(device, dtype=weight_dtype)
-        
-        # Broadcast stain stats to (bs, 6, 512, 512) and concat with spatial
-        stain_maps = stain_stats[:, :, None, None].expand(-1, -1, 512, 512)
-        encoder_input = torch.cat([spatial_tensor, stain_maps], dim=1)  # (bs, 11, 512, 512)
-        
-        spatial_features = spatial_encoder(encoder_input)  # (bs, 4, 64, 64)
+        morph_batch = torch.stack([
+            mv if isinstance(mv, torch.Tensor) else torch.tensor(mv, dtype=torch.float32)
+            for mv in morph_vectors[i:i+batch_size]
+        ]).to(device, dtype=weight_dtype)  # (bs, 16)
+
+        spatial_features = spatial_encoder(spatial_tensor)  # (bs, 4, 64, 64)
         
         # Diagnostic: check if spatial encoder is outputting zeros
         if i == 0:
             feat_abs_mean = spatial_features.abs().mean().item()
             print(f"  [diag] spatial_encoder output |mean|: {feat_abs_mean:.8f}")
-            print(f"  [diag] stain stats (first tile): {stain_stats[0].tolist()}")
+            print(f"  [diag] morph16 (first tile): {morph_batch[0].tolist()}")
         
         # Expand text embeddings for the batch
         batch_text_embeds = text_embeds.expand(bs, -1, -1)
@@ -234,6 +232,10 @@ def generate_concat_conditioned(unet, vae, spatial_encoder, text_encoder, tokeni
         generator = torch.Generator(device=device).manual_seed(process_seed)
         latents = torch.randn(bs, 4, 64, 64, generator=generator, device=device, dtype=weight_dtype)
         latents = latents * scheduler.init_noise_sigma
+
+        for module in unet.modules():
+            if hasattr(module, "film_mlp"):
+                module.current_morph16 = morph_batch
         
         # Denoising loop
         for t in scheduler.timesteps:
@@ -263,6 +265,9 @@ def generate_concat_conditioned(unet, vae, spatial_encoder, text_encoder, tokeni
             generated.append(pil_img)
     
     # Switch models back to train mode
+    for module in unet.modules():
+        if hasattr(module, "film_mlp"):
+            module.current_morph16 = None
     unet.train()
     spatial_encoder.train()
     
@@ -278,15 +283,22 @@ def run_phase2_validation(accelerator, unet, vae, spatial_encoder,
     """
     accelerator.print(f"*** Running Phase 2 Validation at Step {global_step} ***")
 
-    all_pairs = _collect_validation_pairs(args, accelerator)
+    all_pairs, val_dir = _collect_validation_pairs(args, accelerator)
     if len(all_pairs) == 0:
         accelerator.print("Skipping validation: No valid pairs found.")
         return
 
+    morph_df = _load_morph_df(val_dir, args)
+
+    valid_pairs = [pair for pair in all_pairs if pair[2] in morph_df.index]
+    if len(valid_pairs) == 0:
+        accelerator.print("Skipping validation: No valid morphology rows found for selected tiles.")
+        return
+
     rng = random.Random(42)
-    num_samples = min(2000, len(all_pairs))
-    selected_pairs = rng.sample(all_pairs, num_samples)
-    accelerator.print(f"Randomly sampled {num_samples} / {len(all_pairs)} pairs for FID evaluation.")
+    num_samples = min(2000, len(valid_pairs))
+    selected_pairs = rng.sample(valid_pairs, num_samples)
+    accelerator.print(f"Randomly sampled {num_samples} / {len(valid_pairs)} pairs for FID evaluation.")
     
     accelerator.print(f"Generating {len(selected_pairs)} conditional H&E tiles...")
 
@@ -299,18 +311,21 @@ def run_phase2_validation(accelerator, unet, vae, spatial_encoder,
 
         local_real_images = [Image.open(tile_path).convert("RGB") for tile_path in local_tile_paths]
         local_spatial_maps = [np.load(spatial_path)["map"] for spatial_path in local_spatial_paths]
+        local_morph_vectors = [torch.tensor(morph_df.loc[stem].values, dtype=torch.float32) for stem in local_stems]
 
         generated_images = generate_concat_conditioned(
             unet, vae, spatial_encoder, text_encoder, tokenizer,
-            noise_scheduler, local_spatial_maps, accelerator.device, weight_dtype,
+            noise_scheduler, local_spatial_maps, local_morph_vectors, accelerator.device, weight_dtype,
             num_inference_steps=20, seed=args.seed if args.seed else 42,
-            real_images=local_real_images,
         )
 
         if accelerator.is_main_process:
             val_out = Path(args.output_dir) / "validation_images" / f"step_{global_step}"
             val_out.mkdir(parents=True, exist_ok=True)
-            for j, out in enumerate(generated_images[:100]):
+            sample_count = min(100, len(generated_images))
+            sampled_indices = random.Random(42 + global_step).sample(range(len(generated_images)), sample_count)
+            for j in sampled_indices:
+                out = generated_images[j]
                 grid = make_image_grid([local_real_images[j], out], rows=1, cols=2)
                 grid.save(val_out / f"{local_stems[j]}_compare.png")
 

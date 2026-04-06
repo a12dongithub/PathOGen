@@ -43,15 +43,58 @@ import os
 # Spatial maps are encoded to latent size and concatenated with noisy latents
 # as additional UNet input channels. UNet conv_in is expanded from 4→8 channels.
 
+class FiLM_MLP(nn.Module):
+    def __init__(self, in_dim=16, out_dim=320):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(in_dim, out_dim),
+            nn.SiLU(),
+            nn.Linear(out_dim, out_dim * 2),
+        )
+
+    def forward(self, x):
+        gamma_beta = self.net(x)
+        gamma, beta = gamma_beta.chunk(2, dim=-1)
+        gamma = gamma.clamp(-0.5, 0.5)
+        beta = beta.clamp(-0.5, 0.5)
+        return gamma.unsqueeze(-1).unsqueeze(-1), beta.unsqueeze(-1).unsqueeze(-1)
+
+
+def inject_film_into_unet(unet, film_dim=16):
+    film_mlps = nn.ModuleList()
+
+    for _, module in unet.named_modules():
+        if module.__class__.__name__ == "ResnetBlock2D":
+            channels = module.out_channels
+            mlp = FiLM_MLP(film_dim, channels).to(unet.device)
+            film_mlps.append(mlp)
+
+            module.original_forward = module.forward
+            module.film_mlp = mlp
+
+            def new_forward(self, hidden_states, temb=None, **kwargs):
+                out = self.original_forward(hidden_states, temb, **kwargs)
+                if hasattr(self, "current_morph16") and self.current_morph16 is not None:
+                    gamma, beta = self.film_mlp(self.current_morph16)
+                    out = (1.0 + gamma) * out + beta
+                return out
+
+            module.forward = new_forward.__get__(module, module.__class__)
+
+    return film_mlps
+
+
 class PathOGenDataset(Dataset):
     def __init__(self, data_dir, image_transforms=None, tokenizer=None):
         self.data_dir = data_dir
         self.image_dir = os.path.join(data_dir, "tiles")
         self.map_dir = os.path.join(data_dir, "spatial_maps")
-        
-        # Build stem list from spatial maps (no morphology dependency)
+        self.morph_path = os.path.join(data_dir, "morphology_features", "morphology_stats.parquet")
+
+        self.morph_df = pd.read_parquet(self.morph_path)
         self.stems = sorted([
-            os.path.splitext(f)[0] for f in os.listdir(self.map_dir) if f.endswith(".npz")
+            stem for stem in self.morph_df.index
+            if os.path.exists(os.path.join(self.map_dir, f"{stem}.npz"))
         ])
         self.image_transforms = image_transforms
         self.tokenizer = tokenizer
@@ -70,12 +113,6 @@ class PathOGenDataset(Dataset):
         img = cv2.imread(img_path)
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         
-        # Compute stain statistics from the target tile in 0-1 range.
-        img_float = img.astype(np.float32) / 255.0
-        rgb_mean = img_float.mean(axis=(0, 1))
-        rgb_std = img_float.std(axis=(0, 1))
-        stain_stats_tensor = torch.from_numpy(np.concatenate([rgb_mean, rgb_std], axis=0)).float()  # (6,)
-        
         # Load Map (512x512x5)
         map_path = os.path.join(self.map_dir, f"{stem}.npz")
         spatial_map = np.load(map_path)['map'].astype(np.float32) / 255.0
@@ -89,6 +126,7 @@ class PathOGenDataset(Dataset):
             img_tensor = torch.from_numpy(img).permute(2,0,1).float() / 127.5 - 1.0
             
         map_tensor = torch.from_numpy(spatial_map).permute(2,0,1).float()
+        morph16 = torch.tensor(self.morph_df.loc[stem].values, dtype=torch.float32)
         
         text = "he"
         if self.tokenizer is not None:
@@ -102,24 +140,17 @@ class PathOGenDataset(Dataset):
         return {
             "pixel_values": img_tensor,
             "conditioning_pixel_values": map_tensor,
-            "stain_stats": stain_stats_tensor,
+            "morph16": morph16,
             "text": text,
             "input_ids": input_ids
         }
 
 class SpatialCondEncoder(nn.Module):
-    """Downsamples 512x512x(5+3) spatial+color maps to 64x64x4 latent-space features.
-
-    Input: 8-channel tensor = 5 one-hot spatial channels + 3 RGB mean hint channels.
-    The RGB channels are constant-value maps (each pixel = mean R, G, or B of the target tile).
-
-    Uses GroupNorm on the output to normalize features to ~N(0,1), matching
-    the scale of noisy latents.
-    """
+    """Downsamples 5-channel spatial maps to 64x64x4 latent-space features."""
     def __init__(self):
         super().__init__()
         self.net = nn.Sequential(
-            nn.Conv2d(11, 32, 3, stride=2, padding=1),  # 512->256  (5 spatial + 6 stain stats)
+            nn.Conv2d(5, 32, 3, stride=2, padding=1),   # 512->256
             nn.SiLU(),
             nn.Conv2d(32, 64, 3, stride=2, padding=1),  # 256->128
             nn.SiLU(),
@@ -138,14 +169,14 @@ class SpatialCondEncoder(nn.Module):
 def collate_fn(examples):
     pixel_values = torch.stack([example["pixel_values"] for example in examples])
     pipeline_cond = torch.stack([example["conditioning_pixel_values"] for example in examples])
-    stain_stats = torch.stack([example["stain_stats"] for example in examples])  # (B, 6)
+    morph16 = torch.stack([example["morph16"] for example in examples])  # (B, 16)
     text = [example["text"] for example in examples]
     input_ids = torch.stack([example["input_ids"] for example in examples])
     
     return {
         "pixel_values": pixel_values,
         "conditioning_pixel_values": pipeline_cond,
-        "stain_stats": stain_stats,
+        "morph16": morph16,
         "text": text,
         "input_ids": input_ids
     }
@@ -745,6 +776,8 @@ def main(args):
     unet.conv_in = new_conv_in
     unet.config['in_channels'] = 8
     logger.info("Expanded UNet conv_in: 4 → 8 channels (zero-initialized spatial channels)")
+    logger.info("Injecting 16D morphology FiLM into UNet...")
+    film_mlps = inject_film_into_unet(unet, film_dim=16)
 
     # Taken from [Sayak Paul's Diffusers PR #6511](https://github.com/huggingface/diffusers/pull/6511/files)
     def unwrap_model(model):
@@ -769,6 +802,8 @@ def main(args):
                     if len(weights) > 0:
                         weights.pop()
 
+                torch.save(film_mlps.state_dict(), os.path.join(output_dir, "film_mlps.pt"))
+
         def load_model_hook(models, input_dir):
             while len(models) > 0:
                 model = models.pop()
@@ -778,7 +813,7 @@ def main(args):
                     if os.path.exists(unet_path):
                         load_model = UNet2DConditionModel.from_pretrained(input_dir, subfolder="unet")
                         model.register_to_config(**load_model.config)
-                        model.load_state_dict(load_model.state_dict())
+                        model.load_state_dict(load_model.state_dict(), strict=False)
                         del load_model
                     else:
                         logger.info(f"Skipping UNet load: '{unet_path}' not found.")
@@ -797,10 +832,16 @@ def main(args):
                     else:
                         logger.info(f"Skipping SpatialCondEncoder load: '{enc_path}' not found.")
 
+            film_path = os.path.join(input_dir, "film_mlps.pt")
+            if os.path.exists(film_path):
+                film_mlps.load_state_dict(torch.load(film_path, map_location="cpu"))
+            else:
+                logger.info(f"Skipping FiLM load: '{film_path}' not found.")
+
         accelerator.register_save_state_pre_hook(save_model_hook)
         accelerator.register_load_state_pre_hook(load_model_hook)
 
-    # Train UNet + SpatialCondEncoder; freeze text encoder and VAE
+    # Train UNet + SpatialCondEncoder + FiLM; freeze text encoder and VAE
     vae.requires_grad_(False)
     unet.requires_grad_(True)
     spatial_encoder.requires_grad_(True)
@@ -856,9 +897,12 @@ def main(args):
 
     # Optimizer creation
     # Use a gentler LR on the pretrained UNet while letting the new spatial encoder adapt faster.
+    film_param_ids = {id(p) for p in film_mlps.parameters()}
+    unet_only_params = [p for p in unet.parameters() if id(p) not in film_param_ids]
     params_to_optimize = [
-        {"params": list(unet.parameters()), "lr": args.learning_rate * args.phase2_unet_lr_scale},
+        {"params": unet_only_params, "lr": args.learning_rate * args.phase2_unet_lr_scale},
         {"params": list(spatial_encoder.parameters()), "lr": args.learning_rate * args.phase2_spatial_lr_scale},
+        {"params": list(film_mlps.parameters()), "lr": args.learning_rate},
     ]
     
     optimizer = optimizer_class(
@@ -1047,10 +1091,10 @@ def main(args):
 
     # -- 3. Spatial encoder output check --
     _log("[CHECK 3] SpatialCondEncoder output:")
-    dummy_spatial = torch.randn(1, 11, 512, 512, device=accelerator.device)  # 5 spatial + 6 stain stats
+    dummy_spatial = torch.randn(1, 5, 512, 512, device=accelerator.device)
     with torch.no_grad():
         dummy_out = _enc(dummy_spatial)
-    _log(f"  Input shape:  {dummy_spatial.shape} (expected [1, 11, 512, 512])")
+    _log(f"  Input shape:  {dummy_spatial.shape} (expected [1, 5, 512, 512])")
     _log(f"  Output shape: {dummy_out.shape} (expected [1, 4, 64, 64])")
     _log(f"  Output mean:  {dummy_out.mean().item():.6f}")
     _log(f"  Output std:   {dummy_out.std().item():.6f}")
@@ -1083,7 +1127,7 @@ def main(args):
         pv_dev = pv.float().to(accelerator.device)
         cv_dev = cv.to(accelerator.device, dtype=weight_dtype)
         ids_dev = test_batch["input_ids"].to(accelerator.device)
-        stain_dev = test_batch["stain_stats"].to(accelerator.device, dtype=weight_dtype)  # (B, 6)
+        morph_dev = test_batch["morph16"].to(accelerator.device, dtype=weight_dtype)  # (B, 16)
 
         latents_check = _vae.encode(pv_dev).latent_dist.sample() * _vae.config.scaling_factor
         _log(f"  VAE latents shape: {latents_check.shape} (expected [B, 4, 64, 64])")
@@ -1095,11 +1139,9 @@ def main(args):
         noisy_check = noise_scheduler.add_noise(latents_check.float(), noise_check.float(), t_check).to(dtype=weight_dtype)
         _log(f"  Noisy latents range: [{noisy_check.min():.3f}, {noisy_check.max():.3f}]")
 
-        # Build 11-channel encoder input (5 spatial + 6 stain-stat hint)
-        stain_maps_check = stain_dev[:, :, None, None].expand(-1, -1, 512, 512)
-        enc_input_check = torch.cat([cv_dev, stain_maps_check], dim=1)  # (B, 11, 512, 512)
-        _log(f"  Encoder input shape: {enc_input_check.shape} (expected [B, 11, 512, 512])")
-        _log(f"  Stain stats (first tile): {stain_dev[0].tolist()} (RGB mean then RGB std)")
+        enc_input_check = cv_dev
+        _log(f"  Encoder input shape: {enc_input_check.shape} (expected [B, 5, 512, 512])")
+        _log(f"  Morph16 (first tile): {morph_dev[0].tolist()}")
 
         sf_check = _enc(enc_input_check)
         _log(f"  Spatial features shape: {sf_check.shape} (expected [B, 4, 64, 64])")
@@ -1111,6 +1153,9 @@ def main(args):
         _log(f"  UNet input shape: {unet_in_check.shape} (expected [B, 8, 64, 64])")
 
         enc_hs = text_encoder(ids_dev, return_dict=False)[0]
+        for module in _unet.modules():
+            if hasattr(module, "film_mlp"):
+                module.current_morph16 = morph_dev
         pred_check = _unet(unet_in_check, t_check, encoder_hidden_states=enc_hs, return_dict=False)[0]
         _log(f"  UNet output shape: {pred_check.shape} (expected [B, 4, 64, 64])")
         _log(f"  UNet output range: [{pred_check.min():.3f}, {pred_check.max():.3f}]")
@@ -1161,15 +1206,15 @@ def main(args):
                 # Get the text embedding for conditioning
                 encoder_hidden_states = text_encoder(batch["input_ids"], return_dict=False)[0]
 
-                # Build encoder input: 5 spatial channels + 6 stain-stat hint channels.
+                # Build spatial branch input from the 5-channel maps.
                 spatial_cond = batch["conditioning_pixel_values"].to(dtype=weight_dtype)  # (B,5,512,512)
-                stain_stats = batch["stain_stats"].to(dtype=weight_dtype)  # (B, 6)
-
-                # Broadcast stain stats to constant feature maps and concatenate.
-                stain_maps = stain_stats[:, :, None, None].expand(-1, -1, 512, 512)
-                encoder_input = torch.cat([spatial_cond, stain_maps], dim=1)  # (B, 11, 512, 512)
-                spatial_features = spatial_encoder(encoder_input)  # 512x512x11 -> 64x64x4
+                morph16 = batch["morph16"].to(dtype=weight_dtype)  # (B, 16)
+                spatial_features = spatial_encoder(spatial_cond)  # 512x512x5 -> 64x64x4
                 unet_input = torch.cat([noisy_latents, spatial_features], dim=1)  # 64x64x8
+
+                for module in unet.modules():
+                    if hasattr(module, "film_mlp"):
+                        module.current_morph16 = morph16
 
                 # Predict the noise residual
                 model_pred = unet(
@@ -1253,7 +1298,8 @@ def main(args):
         final_unet.save_pretrained(os.path.join(args.output_dir, "unet"))
         final_spatial_encoder = unwrap_model(spatial_encoder)
         torch.save(final_spatial_encoder.state_dict(), os.path.join(args.output_dir, "spatial_encoder.pt"))
-        logger.info(f"Saved final UNet and SpatialCondEncoder to {args.output_dir}")
+        torch.save(film_mlps.state_dict(), os.path.join(args.output_dir, "film_mlps.pt"))
+        logger.info(f"Saved final UNet, SpatialCondEncoder, and FiLM modules to {args.output_dir}")
 
     accelerator.end_training()
 
