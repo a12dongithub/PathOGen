@@ -515,6 +515,12 @@ def parse_args(input_args=None):
         help="Learning-rate multiplier for the spatial conditioning encoder during Phase 2.",
     )
     parser.add_argument(
+        "--min_learning_rate",
+        type=float,
+        default=1e-7,
+        help="Lower bound applied after each scheduler step so learning rates do not decay below this value.",
+    )
+    parser.add_argument(
         "--set_grads_to_none",
         action="store_true",
         help=(
@@ -1239,6 +1245,8 @@ def main(args):
                     accelerator.clip_grad_norm_(all_params, args.max_grad_norm)
                 optimizer.step()
                 lr_scheduler.step()
+                for param_group in optimizer.param_groups:
+                    param_group["lr"] = max(param_group["lr"], args.min_learning_rate)
                 optimizer.zero_grad(set_to_none=args.set_grads_to_none)
 
             # Checks if the accelerator has performed an optimization step behind the scenes

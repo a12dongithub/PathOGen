@@ -49,6 +49,17 @@ else
     echo "Metadata already exists. Skipping."
 fi
 
+if [ ! -f "./data/morphology_features/morphology_stats.parquet" ]; then
+    mkdir -p ./data/morphology_features
+    python generate_morphology_features.py \
+        --dataset_path=./data \
+        --data_dir=./data \
+        --output=./data/morphology_features/morphology_stats.parquet \
+        --n_jobs=32
+else
+    echo "Morphology features already exist. Skipping."
+fi
+
 # HuggingFace requires a source build of diffusers because of a hardcoded version string check.
 # We comment out that single line dynamically so it works on pip installations.
 sed -i 's/check_min_version("0.37.0.dev0")/# check_min_version("0.37.0.dev0")/g' train_text_to_image_base.py
@@ -97,6 +108,7 @@ accelerate launch --multi_gpu --num_processes=8 train_pathogen.py \
     --train_data_dir='./data' \
     --resolution=512 \
     --learning_rate=8e-6 \
+    --min_learning_rate=1e-7 \
     --phase2_unet_lr_scale=0.3 \
     --phase2_spatial_lr_scale=1.0 \
     --lr_scheduler='cosine' \
