@@ -1,20 +1,27 @@
-# Ignore everything by default
+# Ignore everything by default; this repository tracks source and experiment definitions only.
 *
 
-# Do NOT ignore directories (so git can traverse to find allowed files)
+# Allow traversal into source directories.
 !*/
 
-# Explicitly allow python and shell scripts, and gitignore
-!*.py
-!*.sh
+# Root repository configuration.
 !.gitignore
 
-# Explicitly ignore local-only evaluation scripts and results
-eval_fid*.py
-*_results/
-*_eval.py
+# Training source and environment definitions.
+!training/**/*.py
+!training/**/*.sh
+!training/requirements-colab.txt
 
-# Explicitly ignore common Python/OS junk, just in case
-__pycache__/
-*.pyc
-.DS_Store
+# Reproducible experiment launchers and documentation.
+!experiments/**/*.py
+!experiments/**/*.ipynb
+!experiments/**/*.md
+
+# Never track generated artifacts, caches, or checkpoints.
+**/__pycache__/
+**/*.pyc
+**/.DS_Store
+**/outputs/
+**/results/
+**/checkpoints/
+**/*.zip

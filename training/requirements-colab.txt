@@ -1,0 +1,17 @@
+# Colab already provides a CUDA-enabled PyTorch build. Do not reinstall torch here.
+accelerate>=0.34.2,<1
+datasets>=2.21,<4
+diffusers==0.30.2
+gdown==5.2.0
+huggingface-hub>=0.23.2,<1
+numpy>=1.26,<2
+opencv-python-headless>=4.10,<5
+pandas>=2.2,<3
+pillow>=10.4,<13
+pyarrow>=17,<24
+safetensors>=0.4.4,<1
+scipy>=1.13,<2
+torch-fidelity>=0.3,<1
+torchmetrics>=1.4,<2
+transformers==4.44.2
+tqdm>=4.66,<5
