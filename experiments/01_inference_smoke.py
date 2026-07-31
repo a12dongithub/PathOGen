@@ -20,6 +20,7 @@ import pandas as pd
 import torch
 from diffusers import AutoencoderKL, DDPMScheduler, UNet2DConditionModel
 from PIL import Image
+from safetensors.torch import load_file as load_safetensors
 from transformers import CLIPTextModel, CLIPTokenizer
 
 
@@ -242,16 +243,33 @@ def load_models(checkpoint_dir: Path, device: torch.device, dtype: torch.dtype):
     unet.config["in_channels"] = 8
 
     film_mlps = inject_film_into_unet(unet, film_dim=16)
-    trained_unet = UNet2DConditionModel.from_pretrained(
-        checkpoint_dir, subfolder="unet", torch_dtype=dtype
+    unet_weights = checkpoint_dir / "unet" / "diffusion_pytorch_model.safetensors"
+    if not unet_weights.is_file():
+        raise FileNotFoundError(f"Checkpoint UNet weights not found: {unet_weights}")
+
+    # Load directly into the FiLM-injected architecture. Constructing a stock
+    # UNet from this checkpoint makes Diffusers discard its custom FiLM keys.
+    trained_state = load_safetensors(str(unet_weights), device="cpu")
+    film_keys = {key for key in trained_state if ".film_mlp." in key}
+    core_state = {key: value for key, value in trained_state.items() if key not in film_keys}
+    missing, unexpected = unet.load_state_dict(core_state, strict=False)
+    non_film_missing = [key for key in missing if ".film_mlp." not in key]
+    if non_film_missing or unexpected:
+        raise RuntimeError(
+            "Checkpoint does not match the inference UNet: "
+            f"{len(non_film_missing)} non-FiLM keys missing, "
+            f"{len(unexpected)} unexpected keys"
+        )
+    del trained_state, core_state
+    print(
+        f"[model] UNet core loaded; {len(film_keys)} FiLM tensors deferred "
+        "to film_mlps.pt"
     )
-    missing, unexpected = unet.load_state_dict(trained_unet.state_dict(), strict=False)
-    del trained_unet
-    print(f"[model] UNet state loaded: {len(missing)} missing, {len(unexpected)} unexpected keys")
 
     spatial_encoder = SpatialCondEncoder().to(device=device, dtype=dtype)
     spatial_encoder.load_state_dict(load_state_dict(checkpoint_dir / "spatial_encoder.pt", device))
     film_mlps.load_state_dict(load_state_dict(checkpoint_dir / "film_mlps.pt", device))
+    print("[model] Spatial encoder and FiLM weights loaded")
 
     unet.to(device=device, dtype=dtype)
     film_mlps.to(device=device, dtype=dtype)
