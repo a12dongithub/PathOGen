@@ -31,7 +31,9 @@ GIT_ADDY = "https://github.com/a12dongithub/PathOGen"
 BASE_MODEL = "Manojb/stable-diffusion-2-1-base"
 EXPECTED_DATA_GIB = 24.5
 EXPECTED_MODEL_GIB = 5.6
-MIN_INITIAL_FREE_GIB = 55.0
+MIN_DATA_PREP_FREE_GIB = 48.0
+MIN_MODEL_PREP_FREE_GIB = 12.0
+MIN_BOTH_PREP_FREE_GIB = 55.0
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 TRAINING_DIR = REPO_ROOT / "training"
@@ -130,44 +132,65 @@ def prepare_assets(args: argparse.Namespace) -> tuple[Path, Path]:
     work_dir = args.work_dir.resolve()
     work_dir.mkdir(parents=True, exist_ok=True)
 
-    available = free_gib(work_dir)
-    print(f"[disk] Initial free space: {available:.2f} GiB")
-    if not args.data_root and not args.model_root and available < MIN_INITIAL_FREE_GIB:
-        raise RuntimeError(
-            f"Need at least {MIN_INITIAL_FREE_GIB:.0f} GiB free for the two ZIPs and extracted "
-            f"assets; only {available:.2f} GiB is available."
-        )
+    data_search_root = args.data_root.resolve() if args.data_root else work_dir / "data"
+    model_search_root = args.model_root.resolve() if args.model_root else work_dir / "model"
 
+    data_dir = None
+    checkpoint_dir = None
     if args.data_root:
-        data_search_root = args.data_root.resolve()
+        data_dir = find_data_dir(data_search_root)
     else:
-        data_search_root = work_dir / "data"
         try:
             data_dir = find_data_dir(data_search_root)
-            print(f"[assets] Reusing extracted data: {data_dir}")
+            print(f"[assets] Reusing extracted data; download/extraction skipped: {data_dir}")
         except FileNotFoundError:
-            archive = download_drive_zip(args.data_url, work_dir / "downloads" / "data.zip")
-            safe_extract_zip(archive, data_search_root)
-            if not args.keep_archives:
-                archive.unlink(missing_ok=True)
-                print("[disk] Deleted data.zip after extraction")
+            pass
 
     if args.model_root:
-        model_search_root = args.model_root.resolve()
+        checkpoint_dir = find_checkpoint_dir(model_search_root)
     else:
-        model_search_root = work_dir / "model"
         try:
             checkpoint_dir = find_checkpoint_dir(model_search_root)
-            print(f"[assets] Reusing extracted checkpoint: {checkpoint_dir}")
+            print(
+                "[assets] Reusing extracted checkpoint; download/extraction skipped: "
+                f"{checkpoint_dir}"
+            )
         except FileNotFoundError:
-            archive = download_drive_zip(args.model_url, work_dir / "downloads" / "model.zip")
-            safe_extract_zip(archive, model_search_root)
-            if not args.keep_archives:
-                archive.unlink(missing_ok=True)
-                print("[disk] Deleted model.zip after extraction")
+            pass
 
-    data_dir = find_data_dir(data_search_root)
-    checkpoint_dir = find_checkpoint_dir(model_search_root)
+    available = free_gib(work_dir)
+    print(f"[disk] Initial free space: {available:.2f} GiB")
+    if data_dir is None and checkpoint_dir is None:
+        required = MIN_BOTH_PREP_FREE_GIB
+    elif data_dir is None:
+        required = MIN_DATA_PREP_FREE_GIB
+    elif checkpoint_dir is None:
+        required = MIN_MODEL_PREP_FREE_GIB
+    else:
+        required = 0.0
+
+    if available < required:
+        raise RuntimeError(
+            f"Need at least {required:.0f} GiB free to prepare the missing assets; "
+            f"only {available:.2f} GiB is available."
+        )
+
+    if data_dir is None:
+        archive = download_drive_zip(args.data_url, work_dir / "downloads" / "data.zip")
+        safe_extract_zip(archive, data_search_root)
+        if not args.keep_archives:
+            archive.unlink(missing_ok=True)
+            print("[disk] Deleted data.zip after extraction")
+        data_dir = find_data_dir(data_search_root)
+
+    if checkpoint_dir is None:
+        archive = download_drive_zip(args.model_url, work_dir / "downloads" / "model.zip")
+        safe_extract_zip(archive, model_search_root)
+        if not args.keep_archives:
+            archive.unlink(missing_ok=True)
+            print("[disk] Deleted model.zip after extraction")
+        checkpoint_dir = find_checkpoint_dir(model_search_root)
+
     print(f"[assets] Dataset: {data_dir}")
     print(f"[assets] Checkpoint: {checkpoint_dir}")
     print(f"[disk] Free after extraction: {free_gib(work_dir):.2f} GiB")
