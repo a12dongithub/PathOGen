@@ -23,8 +23,8 @@ from PIL import Image
 from transformers import CLIPTextModel, CLIPTokenizer
 
 
-DATA_ADDY = "https://drive.google.com/file/d/1sBc4-CexT3S2cw1LZysrX4BLjVjN6BPt/view?usp=drive_link"
-MODEL_ADDY = "https://drive.google.com/file/d/1QLymjt0qnjM2FM-oR5vRYB0B1URcg5wq/view?usp=drive_link"
+DATA_ADDY = "https://drive.google.com/file/d/1sBc4-CexT3S2cw1LZysrX4BLjVjN6BPt/view?usp=sharing"
+MODEL_ADDY = "https://drive.google.com/file/d/1QLymjt0qnjM2FM-oR5vRYB0B1URcg5wq/view?usp=sharing"
 GIT_ADDY = "https://github.com/a12dongithub/PathOGen"
 
 BASE_MODEL = "Manojb/stable-diffusion-2-1-base"
