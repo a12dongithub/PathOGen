@@ -40,43 +40,22 @@ accelerate config default
 
 # ── 2. Data Preprocessing (precomputed, not during training) ──
 echo "[3/6] Precomputing spatial maps..."
-SPATIAL_DIR="./data/processed/generator/spatial_maps"
-MORPH_DIR="./data/processed/generator/morphology_features"
-MANIFEST_DIR="./data/processed/generator/manifests"
+CONDITIONS_DIR="./data/processed/conditions"
+SPATIAL_DIR="$CONDITIONS_DIR/spatial_maps"
+MORPH_DIR="$CONDITIONS_DIR/morphology"
+METADATA_FILE="$CONDITIONS_DIR/metadata.jsonl"
 TILES_DIR="./data/interim/tiles/tcga_brca"
 GEOJSON_DIR="./data/interim/annotations/tcga_brca/geojson"
 
-if [ ! -d "$SPATIAL_DIR" ] || [ -z "$(find "$SPATIAL_DIR" -maxdepth 1 -name '*.npz' -print -quit 2>/dev/null)" ]; then
-    python -m cpathogen.preprocessing.spatial_maps \
-        --geojson-dir="$GEOJSON_DIR" \
-        --output-dir="$SPATIAL_DIR" \
-        --n_jobs=32
-else
-    echo "Spatial maps already exist. Skipping."
-fi
-
-# spatial_maps.py skips existing NPZ outputs, so it safely resumes.
-
-if [ ! -f "$MANIFEST_DIR/metadata.jsonl" ]; then
-    python -m cpathogen.preprocessing.metadata \
+if [ ! -f "$METADATA_FILE" ] || [ ! -f "$MORPH_DIR/standardized.parquet" ] || \
+   [ ! -d "$SPATIAL_DIR" ] || [ -z "$(find "$SPATIAL_DIR" -maxdepth 1 -name '*.npz' -print -quit 2>/dev/null)" ]; then
+    python workflows/02_build_conditions/run.py \
         --tiles-dir="$TILES_DIR" \
-        --output="$MANIFEST_DIR/metadata.jsonl"
-else
-    echo "Metadata already exists. Skipping."
-fi
-
-if [ ! -f "$MORPH_DIR/morphology_standardized.parquet" ]; then
-    mkdir -p "$MORPH_DIR"
-    python -m cpathogen.preprocessing.morphology_features \
-        --image-dir="$TILES_DIR" \
         --geojson-dir="$GEOJSON_DIR" \
-        --raw-output="$MORPH_DIR/morphology_raw.parquet" \
-        --output="$MORPH_DIR/morphology_standardized.parquet" \
-        --scaler-output="$MORPH_DIR/scaler.joblib" \
-        --manifest-output="$MORPH_DIR/feature_manifest.json" \
-        --n_jobs=32
+        --output-dir="$CONDITIONS_DIR" \
+        --n-jobs=32
 else
-    echo "Morphology features already exist. Skipping."
+    echo "Condition bundle already exists. Skipping preprocessing."
 fi
 
 # HuggingFace requires a source build of diffusers because of a hardcoded version string check.
@@ -95,7 +74,7 @@ echo "[4/6] Phase 1: Domain adaptation (unconditional H&E generation)..."
 # Phase 1 is already complete — uncomment to re-run if needed
 # accelerate launch --multi_gpu --num_processes=8 src/cpathogen/generation/phase1.py \
 #     --pretrained_model_name_or_path='Manojb/stable-diffusion-2-1-base' \
-#     --metadata_file='./data/processed/generator/manifests/metadata.jsonl' \
+#     --metadata_file='./data/processed/conditions/metadata.jsonl' \
 #     --train_data_dir="$TILES_DIR" \
 #     --use_ema \
 #     --resolution=512 \
@@ -127,7 +106,7 @@ accelerate launch --multi_gpu --num_processes=8 src/cpathogen/generation/phase2.
     --output_dir='./artifacts/runs/phase2_concat_film' \
     --train-tiles-dir="$TILES_DIR" \
     --train-spatial-maps-dir="$SPATIAL_DIR" \
-    --train-morphology-table="$MORPH_DIR/morphology_standardized.parquet" \
+    --train-morphology-table="$MORPH_DIR/standardized.parquet" \
     --resolution=512 \
     --learning_rate=8e-6 \
     --min_learning_rate=1e-7 \

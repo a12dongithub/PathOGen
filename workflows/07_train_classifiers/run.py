@@ -1,4 +1,4 @@
-"""Workflow 08: train downstream classifier heads.
+"""Workflow 07: train downstream classifier heads.
 
 TODO: consume sealed feature/split manifests and save models, preprocessing,
 metrics, and provenance into one immutable run.

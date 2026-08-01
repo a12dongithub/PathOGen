@@ -66,8 +66,8 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 WEIGHT_DTYPE = torch.float16
 
 # Configuration
-SPATIAL_DIR = r"data/processed/generator/spatial_maps"
-MORPH_STATS_PATH = r"data/processed/generator/morphology_features/morphology_standardized.parquet"
+SPATIAL_DIR = r"data/processed/conditions/spatial_maps"
+MORPH_STATS_PATH = r"data/processed/conditions/morphology/standardized.parquet"
 CKPT_DIR = r"artifacts/runs/legacy_phase2_fid58/checkpoints/checkpoint-30000"
 BASE_MODEL = "Manojb/stable-diffusion-2-1-base"
 

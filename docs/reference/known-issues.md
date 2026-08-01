@@ -21,7 +21,7 @@ Resolution: create patient/slide split manifests first, invoke preprocessing on 
 
 ## Blocking: complete main data/annotation pipeline is absent
 
-The posters describe approximately 1.038 million TCGA-BRCA tiles from 1,114 slides and CellViT++ annotations. The full tile set, CellViT++ source/configuration, tiling script, WSI manifest, segmentation command, and annotation-quality report are not present in this workspace.
+The posters describe approximately 1.038 million TCGA-BRCA tiles from 1,114 slides and CellViT++ annotations. The full tile set, CellViT++ source/configuration, segmentation command, and annotation-quality report are not present in this workspace.
 
 Resolution: document or import the exact upstream repository and versions, record TCGA case/slide identifiers and split rules, and make the annotation stage reproducible without embedding restricted data into the source repository.
 

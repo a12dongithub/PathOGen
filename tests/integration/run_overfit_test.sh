@@ -44,7 +44,7 @@ python tests/integration/quick_overfit_test.py \
     --pretrained_model_name_or_path='Manojb/stable-diffusion-2-1-base' \
     --phase1_unet_checkpoint='artifacts/runs/phase1_domain_adapt/checkpoints/checkpoint-30000' \
     --tiles_dir='data/interim/tiles/tcga_brca' \
-    --spatial_maps_dir='data/processed/generator/spatial_maps' \
+    --spatial_maps_dir='data/processed/conditions/spatial_maps' \
     --num_images=200 \
     --num_steps=500 \
     --eval_every=100 \

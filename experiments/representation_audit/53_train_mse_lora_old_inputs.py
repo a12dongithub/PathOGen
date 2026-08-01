@@ -170,9 +170,9 @@ def main():
     os.makedirs(MODEL_DIR, exist_ok=True)
     os.makedirs(METRICS_DIR, exist_ok=True)
     os.makedirs(FIGURES_DIR, exist_ok=True)
-    SPATIAL_DIR = r"data/processed/generator/spatial_maps"
+    SPATIAL_DIR = r"data/processed/conditions/spatial_maps"
     # Old Morphology file with 16 dims
-    MORPH_PATH = r"data/processed/generator/morphology_features/morphology_standardized.parquet"
+    MORPH_PATH = r"data/processed/conditions/morphology/standardized.parquet"
     CLASSIFIER_PATH = r"artifacts/models/downstream/mlp_uni2h.joblib"
     WEIGHTS_DIR = r"artifacts/models/adapters/high_acc_weights_old_inputs"
     

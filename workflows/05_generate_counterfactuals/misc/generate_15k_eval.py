@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """
-Generate 2000 images from checkpoint-10000 with corrected spatial map labels + FID.
-Publication-quality grids: [Spatial Map (labeled) | Real H&E | checkpoint-10000]
+Generate 2000 images from checkpoint-15000 with corrected spatial map labels + FID.
+Publication-quality grids: [Spatial Map (labeled) | Real H&E | checkpoint-15000]
 
 CellViT/PanNuke channel order (verified from data):
   ch0 = Neoplastic       → White
@@ -225,11 +225,11 @@ def generate_all(pipeline, spatial_maps, morphologies, device, seed, cond_scale,
 
 
 def main():
-    CKPT = "artifacts/runs/legacy_phase2_10k/checkpoints/checkpoint-10000"
+    CKPT = "artifacts/runs/legacy_phase2_15k/checkpoints/checkpoint-15000"
     BASE_MODEL = "Manojb/stable-diffusion-2-1-base"
     tiles_dir = Path("data/interim/tiles/tcga_brca")
-    spatial_dir = Path("data/processed/generator/spatial_maps")
-    OUTPUT_DIR = Path("artifacts/runs/legacy_phase2_10k/evaluation")
+    spatial_dir = Path("data/processed/conditions/spatial_maps")
+    OUTPUT_DIR = Path("artifacts/runs/legacy_phase2_15k/evaluation")
     NUM_IMAGES = 2000
     BATCH_SIZE = 8  # RTX 6000 48GB can handle 8
     SEED = 42
@@ -246,7 +246,7 @@ def main():
     (OUTPUT_DIR / "generated").mkdir(exist_ok=True)
 
     # ── Load Data ──
-    morph_path = Path("data/processed/generator/morphology_features/morphology_standardized.parquet")
+    morph_path = Path("data/processed/conditions/morphology/standardized.parquet")
 
     morph_df = pd.read_parquet(morph_path)
 
@@ -332,7 +332,7 @@ def main():
     score = fid.compute().item()
 
     print(f"\n{'='*60}")
-    print(f"  FID (checkpoint-10000, {len(samples)} images): {score:.2f}")
+    print(f"  FID (checkpoint-15000, {len(samples)} images): {score:.2f}")
     print(f"{'='*60}")
     print(f"\nDone!")
     print(f"  Grids:     {OUTPUT_DIR / 'grids'} ({num_grids} files)")

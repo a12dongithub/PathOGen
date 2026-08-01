@@ -1,4 +1,4 @@
-"""Workflow 05: Phase-2 spatial-concat plus FiLM training."""
+"""Workflow 04: Phase-2 spatial-concat plus FiLM training."""
 
 from cpathogen.generation.phase2 import main, parse_args
 

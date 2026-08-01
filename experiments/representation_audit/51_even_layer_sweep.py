@@ -148,7 +148,7 @@ def main():
     os.makedirs(MODEL_DIR, exist_ok=True)
     os.makedirs(METRICS_DIR, exist_ok=True)
     os.makedirs(FIGURES_DIR, exist_ok=True)
-    SPATIAL_DIR = r"data/processed/generator/spatial_maps"
+    SPATIAL_DIR = r"data/processed/conditions/spatial_maps"
     MORPH_PATH = r"data/processed/classification/tcga_subtypes/features/morphology_with_counts.parquet"
     WEIGHTS_DIR = r"artifacts/models/adapters/sweep_weights"
     CLASSIFIER_PATH = r"artifacts/models/downstream/mlp_uni2h.joblib"

@@ -1,4 +1,4 @@
-"""Workflow 04: Phase-1 H&E domain adaptation."""
+"""Workflow 03: Phase-1 H&E domain adaptation."""
 
 from cpathogen.generation.phase1 import main
 

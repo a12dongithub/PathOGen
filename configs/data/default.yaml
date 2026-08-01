@@ -3,7 +3,6 @@ status: reference_not_yet_wired
 data_root: "${CPATHOGEN_DATA_ROOT:-data}"
 
 raw:
-  tcga_slides: data/raw/tcga_brca/slides
   tcga_clinical: data/raw/tcga_brca/clinical
   tcga_subtypes: data/raw/tcga_brca/molecular_subtypes.csv
   bach_images: data/raw/bach/images
@@ -15,13 +14,13 @@ interim:
   bach_tiles: data/interim/tiles/bach
   tcga_geojson: data/interim/annotations/tcga_brca/geojson
 
-generator_contract:
-  spatial_maps: data/processed/generator/spatial_maps
-  morphology_raw: data/processed/generator/morphology_features/morphology_raw.parquet
-  morphology_standardized: data/processed/generator/morphology_features/morphology_standardized.parquet
-  morphology_scaler: data/processed/generator/morphology_features/scaler.joblib
-  morphology_manifest: data/processed/generator/morphology_features/feature_manifest.json
-  metadata: data/processed/generator/manifests/metadata.jsonl
+conditions:
+  spatial_maps: data/processed/conditions/spatial_maps
+  morphology_raw: data/processed/conditions/morphology/raw.parquet
+  morphology_standardized: data/processed/conditions/morphology/standardized.parquet
+  morphology_scaler: data/processed/conditions/morphology/scaler.joblib
+  morphology_manifest: data/processed/conditions/morphology/feature_manifest.json
+  metadata: data/processed/conditions/metadata.jsonl
 
 classification:
   bach: data/processed/classification/bach

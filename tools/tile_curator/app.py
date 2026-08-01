@@ -10,7 +10,7 @@ import io
 app = Flask(__name__)
 
 # Constants
-SPATIAL_DIR = r"data/processed/generator/spatial_maps"
+SPATIAL_DIR = r"data/processed/conditions/spatial_maps"
 META_CSV = r"data/processed/classification/tcga_subtypes/manifests/legacy_10k_samples.csv"
 LABELS_CSV = r"data/processed/classification/tcga_subtypes/manifests/legacy_curated_samples.csv"
 

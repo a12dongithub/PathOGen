@@ -1,6 +1,6 @@
 import numpy as np
 
-path = r"data/processed/generator/spatial_maps/TCGA-A1-A0SF_x12288_y50176_BL.npz"
+path = r"data/processed/conditions/spatial_maps/TCGA-A1-A0SF_x12288_y50176_BL.npz"
 data = np.load(path)['map']
 
 print("Channel 0 (Tumor): max =", data[:, :, 0].max())

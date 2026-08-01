@@ -1,4 +1,4 @@
-"""Workflow 09: evaluate matched counterfactuals.
+"""Workflow 08: evaluate matched counterfactuals.
 
 TODO: combine realism, control fidelity, frozen-classifier effects,
 representation changes, repeated seeds, and patient-level statistics.

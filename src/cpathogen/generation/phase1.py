@@ -24,7 +24,7 @@ from contextlib import nullcontext
 from pathlib import Path
 
 from cpathogen.generation import inference
-from cpathogen.utils.paths import ARTIFACT_ROOT, GENERATOR_MANIFESTS
+from cpathogen.utils.paths import ARTIFACT_ROOT, CONDITIONS_METADATA
 import accelerate
 import datasets
 import numpy as np
@@ -256,7 +256,7 @@ def parse_args():
     parser.add_argument(
         "--metadata_file",
         type=str,
-        default=str(GENERATOR_MANIFESTS / "metadata.jsonl"),
+        default=str(CONDITIONS_METADATA),
         help="ImageFolder metadata JSONL. file_name entries are resolved relative to this file.",
     )
     parser.add_argument(

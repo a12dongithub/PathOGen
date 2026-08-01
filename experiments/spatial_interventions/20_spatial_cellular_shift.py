@@ -277,10 +277,10 @@ def main():
     unet, vae, spatial_encoder, text_encoder, tokenizer, noise_scheduler = load_pathogen_models(device, weight_dtype)
     
     TARGET_STEM = "TCGA-A1-A0SE_x76800_y52224_BL"
-    DATA_DIR = Path(r"data/processed/generator")
+    DATA_DIR = Path(r"data/processed/conditions")
     
-    spatial_path = Path("data/processed/generator/spatial_maps") / f"{TARGET_STEM}.npz"
-    morph_path = Path("data/processed/generator/morphology_features/morphology_standardized.parquet")
+    spatial_path = Path("data/processed/conditions/spatial_maps") / f"{TARGET_STEM}.npz"
+    morph_path = Path("data/processed/conditions/morphology/standardized.parquet")
         
     morph_df = pd.read_parquet(morph_path)
     original_map = np.load(spatial_path)["map"]

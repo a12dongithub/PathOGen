@@ -4,7 +4,7 @@
 
 ```mermaid
 flowchart LR
-    A["TCGA-BRCA H&E whole-slide images"] --> B["512 x 512 tiles"]
+    B["Prepared TCGA-BRCA 512 x 512 H&E tiles"]
     B --> C["Nucleus segmentation and classification"]
     C --> D["Per-tile GeoJSON polygons and cell types"]
     D --> E["5-channel spatial maps"]
@@ -28,14 +28,14 @@ data/
 ├── interim/
 │   ├── tiles/tcga_brca/<stem>.png or <stem>.jpg
 │   └── annotations/tcga_brca/geojson/<stem>.geojson
-└── processed/generator/
+└── processed/conditions/
     ├── spatial_maps/<stem>.npz
-    ├── morphology_features/
-    │   ├── morphology_raw.parquet
-    │   ├── morphology_standardized.parquet
+    ├── morphology/
+    │   ├── raw.parquet
+    │   ├── standardized.parquet
     │   ├── scaler.joblib
     │   └── feature_manifest.json
-    └── manifests/metadata.jsonl
+    └── metadata.jsonl
 ```
 
 `PathOGenDataset` intersects the morphology table index with available spatial-map files and then assumes that a matching PNG or JPG tile exists. Its returned items contain the normalized H&E image, five-channel map, 16-value vector, stem, and tokenized constant prompt `"he"`.

@@ -153,8 +153,8 @@ def main():
     os.makedirs(MODEL_DIR, exist_ok=True)
     os.makedirs(METRICS_DIR, exist_ok=True)
     os.makedirs(FIGURES_DIR, exist_ok=True)
-    SPATIAL_DIR = r"data/processed/generator/spatial_maps"
-    MORPH_PATH = r"data/processed/generator/morphology_features/morphology_standardized.parquet"
+    SPATIAL_DIR = r"data/processed/conditions/spatial_maps"
+    MORPH_PATH = r"data/processed/conditions/morphology/standardized.parquet"
     CLASSIFIER_PATH = r"artifacts/models/downstream/mlp_uni2h.joblib"
     
     timm_kwargs = {

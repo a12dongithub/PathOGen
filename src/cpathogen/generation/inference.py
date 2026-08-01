@@ -81,7 +81,7 @@ def _load_morph_df(val_dir, args):
     for path in candidate_paths:
         if path.exists():
             return pd.read_parquet(path)
-    raise FileNotFoundError("Could not find morphology_standardized.parquet for validation.")
+    raise FileNotFoundError("Could not find the standardized morphology table for validation.")
 
 
 def _collect_phase1_tiles(args, accelerator):

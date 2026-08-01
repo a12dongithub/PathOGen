@@ -19,8 +19,7 @@ datasets:
     status: present_with_incomplete_provenance
     role: legacy_cached_features_and_activations
   tcga_brca_main:
-    slides: data/raw/tcga_brca/slides
     tiles: data/interim/tiles/tcga_brca
     geojson: data/interim/annotations/tcga_brca/geojson
-    status: missing
-    role: generator_and_subtype_cohort
+    status: local_three_tile_smoke_subset_full_cohort_missing
+    role: generation_and_subtype_cohort

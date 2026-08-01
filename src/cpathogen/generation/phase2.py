@@ -25,7 +25,7 @@ import shutil
 from pathlib import Path
 
 from cpathogen.generation import inference
-from cpathogen.utils.paths import ARTIFACT_ROOT, MORPHOLOGY_FEATURES, SPATIAL_MAPS, TCGA_TILES
+from cpathogen.utils.paths import ARTIFACT_ROOT, MORPHOLOGY_DIR, SPATIAL_MAPS, TCGA_TILES
 import accelerate
 import numpy as np
 
@@ -558,7 +558,7 @@ def parse_args(input_args=None):
     parser.add_argument("--train-spatial-maps-dir", default=str(SPATIAL_MAPS))
     parser.add_argument(
         "--train-morphology-table",
-        default=str(MORPHOLOGY_FEATURES / "morphology_standardized.parquet"),
+        default=str(MORPHOLOGY_DIR / "standardized.parquet"),
     )
     parser.add_argument("--validation-tiles-dir", default=None)
     parser.add_argument("--validation-spatial-maps-dir", default=None)

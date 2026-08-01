@@ -83,10 +83,10 @@ def probe_counterfactuals():
     classes = ["Normal", "Benign", "InSitu", "Invasive"]
     
     # Pick a sample from TCGA
-    DATA_DIR = Path(r"data/processed/generator")
+    DATA_DIR = Path(r"data/processed/conditions")
     stem = "TCGA-A8-A083_x14336_y30720_BR" # Using one from the previous test script
-    spatial_path = Path("data/processed/generator/spatial_maps") / f"{stem}.npz"
-    morph_path = Path("data/processed/generator/morphology_features/morphology_standardized.parquet")
+    spatial_path = Path("data/processed/conditions/spatial_maps") / f"{stem}.npz"
+    morph_path = Path("data/processed/conditions/morphology/standardized.parquet")
         
     morph_df = pd.read_parquet(morph_path)
     

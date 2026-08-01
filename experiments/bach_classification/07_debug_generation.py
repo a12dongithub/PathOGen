@@ -45,11 +45,11 @@ def main():
     film_mlps.load_state_dict(torch.load(os.path.join(CKPT_DIR, "film_mlps.pt"), map_location=device))
     film_mlps.to(device, dtype=weight_dtype)
     
-    DATA_DIR = Path(r"data/processed/generator")
+    DATA_DIR = Path(r"data/processed/conditions")
     OUTPUT_DIR = Path(r"artifacts/runs/debug_generation")
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     
-    morph_df = pd.read_parquet(Path("data/processed/generator/morphology_features/morphology_standardized.parquet"))
+    morph_df = pd.read_parquet(Path("data/processed/conditions/morphology/standardized.parquet"))
     
     samples = [
         "TCGA-A8-A083_x14336_y30720_BR",
@@ -58,7 +58,7 @@ def main():
     
     for stem in samples:
         img_path = Path("data/interim/tiles/tcga_brca") / f"{stem}.png"
-        spatial_path = Path("data/processed/generator/spatial_maps") / f"{stem}.npz"
+        spatial_path = Path("data/processed/conditions/spatial_maps") / f"{stem}.npz"
         
         real_img = Image.open(img_path).convert("RGB")
         original_map = np.load(spatial_path)["map"]

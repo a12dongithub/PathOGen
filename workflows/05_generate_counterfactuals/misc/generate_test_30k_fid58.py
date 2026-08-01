@@ -30,7 +30,7 @@ def main():
     CKPT_DIR = r"artifacts/runs/legacy_phase2_fid58/checkpoints/checkpoint-30000"
     BASE_MODEL = "Manojb/stable-diffusion-2-1-base"
     tiles_dir = Path("data/interim/tiles/tcga_brca")
-    spatial_dir = Path("data/processed/generator/spatial_maps")
+    spatial_dir = Path("data/processed/conditions/spatial_maps")
     OUTPUT_DIR = Path(r"artifacts/runs/test_generation_fid58/samples")
     NUM_IMAGES = 4
     SEED = 42
@@ -79,7 +79,7 @@ def main():
 
     # ── Load Data ──
     print("Loading test data...")
-    morph_path = Path("data/processed/generator/morphology_features/morphology_standardized.parquet")
+    morph_path = Path("data/processed/conditions/morphology/standardized.parquet")
         
     morph_df = pd.read_parquet(morph_path)
 

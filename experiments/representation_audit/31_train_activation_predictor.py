@@ -12,8 +12,8 @@ import joblib
 
 # Paths
 BENCHMARK_FEATURES_PATH = r"data/processed/classification/tcga_subtypes/embeddings/combined/benchmark_features.parquet"
-MORPH_STATS_PATH = r"data/processed/generator/morphology_features/morphology_standardized.parquet"
-SPATIAL_DIR = r"data/processed/generator/spatial_maps"
+MORPH_STATS_PATH = r"data/processed/conditions/morphology/standardized.parquet"
+SPATIAL_DIR = r"data/processed/conditions/spatial_maps"
 OUTPUT_DIR = r"artifacts/runs/activation_poc"
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)

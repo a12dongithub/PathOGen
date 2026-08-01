@@ -155,11 +155,11 @@ def main():
     print("Loading PathOGen generative models...")
     unet, vae, spatial_encoder, text_encoder, tokenizer, noise_scheduler = load_pathogen_models(device, weight_dtype)
     
-    DATA_DIR = Path(r"data/processed/generator")
-    spatial_dir = Path("data/processed/generator/spatial_maps")
+    DATA_DIR = Path(r"data/processed/conditions")
+    spatial_dir = Path("data/processed/conditions/spatial_maps")
     all_spatial_files = list(spatial_dir.glob("*.npz"))
     
-    morph_path = Path("data/processed/generator/morphology_features/morphology_standardized.parquet")
+    morph_path = Path("data/processed/conditions/morphology/standardized.parquet")
     morph_df = pd.read_parquet(morph_path)
     
     valid_files = [f for f in all_spatial_files if f.stem in morph_df.index]

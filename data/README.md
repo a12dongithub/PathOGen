@@ -10,19 +10,18 @@ data/
 │   │   └── labels.csv
 │   ├── pannuke/
 │   └── tcga_brca/
-│       ├── slides/                 # missing in this workspace
 │       ├── clinical/               # missing in this workspace
 │       └── molecular_subtypes.csv
 ├── interim/
 │   ├── tiles/
 │   │   ├── bach/                   # 4,800 existing 512 px tiles
-│   │   └── tcga_brca/              # missing main generator tiles
-│   └── annotations/tcga_brca/geojson/  # missing CellViT++ outputs
+│   │   └── tcga_brca/              # local smoke-test tiles; full cohort absent
+│   └── annotations/tcga_brca/geojson/  # matching local smoke-test GeoJSON
 ├── processed/
-│   ├── generator/
+│   ├── conditions/
 │   │   ├── spatial_maps/           # generated five-channel `.npz` files
-│   │   ├── morphology_features/    # raw/standardized tables + scaler
-│   │   └── manifests/              # generator `metadata.jsonl`
+│   │   ├── morphology/             # raw/standardized tables + scaler
+│   │   └── metadata.jsonl          # Phase-1 ImageFolder metadata
 │   └── classification/
 │       ├── bach/{manifests,embeddings}/
 │       └── tcga_subtypes/{manifests,embeddings}/
@@ -33,6 +32,10 @@ data/
     └── os_metadata/                 # retained `.DS_Store`/Thumbs.db files
 ```
 
-Present material includes PanNuke folds, BACH source images and tiles, two historical embedding tables, TCGA subtype/sample manifests, and 8,481 cached `.pt` tensors. The complete TCGA-BRCA slide/tile cohort, CellViT++ GeoJSON annotations, spatial maps, morphology tables, and generator metadata are not present and must be generated or supplied.
+Present material includes PanNuke folds, BACH source images and tiles, two
+historical embedding tables, TCGA subtype/sample manifests, and 8,481 cached
+`.pt` tensors. Three matched TCGA-BRCA tiles and GeoJSON files are used locally
+to smoke-test condition building. The complete TCGA-BRCA tile/annotation cohort
+is not present and must be supplied separately.
 
 Model weights (`.pth`, `.safetensors`, training `.pt`) belong under `artifacts/`, not `data/misc/`. `data/misc/` is reserved for provenance-poor data caches that are not part of a reproducible pipeline contract.

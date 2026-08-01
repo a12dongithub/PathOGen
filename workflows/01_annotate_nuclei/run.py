@@ -1,4 +1,4 @@
-"""Workflow 02: run CellViT++ and validate nucleus GeoJSON.
+"""Workflow 01: run CellViT++ and validate nucleus GeoJSON.
 
 TODO: provide the missing upstream model, checkpoint, class mapping, and
 provenance before implementing this workflow.

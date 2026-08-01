@@ -6,7 +6,7 @@ CPathoGen is a research prototype for generating controllable 512 x 512 H&E hist
 
 ## What the project does
 
-1. Tile TCGA-BRCA whole-slide images into H&E patches.
+1. Accept prepared `512 x 512` H&E tiles as input.
 2. Obtain weak nucleus locations and cell types from a segmentation/classification system.
 3. Convert those annotations into five-channel cellular spatial maps and a 16-value morphology/stain vector.
 4. Adapt a Stable Diffusion 2.1 backbone to H&E in a first training phase.
@@ -36,7 +36,7 @@ The current training code implements spatial conditioning with a small CNN whose
 | `src/cpathogen/` | Generator preprocessing/training/evaluation and encoder modules | Canonical source |
 | `workflows/` | Numbered operational entry points | Intended workflow layer; incomplete |
 | `experiments/` | Foundation-model benchmarks, counterfactual probes, and representation audits | Historical experiment records; paths now use the common layout but remain lightly validated |
-| `data/` | PanNuke, BACH, TCGA intermediate tensors, features, and small manifests | Local data; main TCGA generator cohort remains incomplete |
+| `data/` | PanNuke, BACH, TCGA intermediate tensors, features, and small manifests | Local data; main TCGA generation cohort remains incomplete |
 | `artifacts/` | Checkpoints, fitted models, generated images, metrics, and historical results | Outputs with incomplete provenance |
 | `third_party/nuhtc/` | Bundled NuHTC/MMDetection nuclei-segmentation project | Third-party/legacy segmentation code |
 | `reports/` | Posters, figures, and manuscripts | Narrative/output material |

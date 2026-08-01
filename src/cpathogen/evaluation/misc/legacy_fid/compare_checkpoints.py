@@ -212,7 +212,7 @@ def main():
     CKPT_B = "artifacts/runs/legacy_phase2_15k/checkpoints/checkpoint-15000"
     BASE_MODEL = "Manojb/stable-diffusion-2-1-base"
     tiles_dir = Path("data/interim/tiles/tcga_brca")
-    spatial_dir = Path("data/processed/generator/spatial_maps")
+    spatial_dir = Path("data/processed/conditions/spatial_maps")
     OUTPUT_DIR = Path("artifacts/runs/legacy_phase2_checkpoint_comparison")
     NUM_IMAGES = 100
     BATCH_SIZE = 4
@@ -231,7 +231,7 @@ def main():
     (OUTPUT_DIR / "ckpt_b").mkdir(exist_ok=True)
 
     # ── Load Data ──
-    morph_path = Path("data/processed/generator/morphology_features/morphology_standardized.parquet")
+    morph_path = Path("data/processed/conditions/morphology/standardized.parquet")
 
     morph_df = pd.read_parquet(morph_path)
 

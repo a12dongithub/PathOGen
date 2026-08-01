@@ -4,8 +4,8 @@ architecture: direct_concat_spatial_encoder_plus_film
 base_model: Manojb/stable-diffusion-2-1-base
 phase1_checkpoint: artifacts/runs/phase1_domain_adapt/checkpoints/checkpoint-30000
 train_tiles: data/interim/tiles/tcga_brca
-train_spatial_maps: data/processed/generator/spatial_maps
-train_morphology_table: data/processed/generator/morphology_features/morphology_standardized.parquet
+train_spatial_maps: data/processed/conditions/spatial_maps
+train_morphology_table: data/processed/conditions/morphology/standardized.parquet
 output_directory: artifacts/runs/phase2_concat_film
 resolution: 512
 max_train_steps: 50000

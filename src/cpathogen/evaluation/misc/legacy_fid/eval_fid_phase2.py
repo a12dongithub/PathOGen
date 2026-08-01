@@ -184,7 +184,7 @@ def main():
     CKPT = "artifacts/runs/legacy_phase2_controlnet/checkpoints/checkpoint-10000"
     BASE_MODEL = "Manojb/stable-diffusion-2-1-base"
     tiles_dir = Path("data/interim/tiles/tcga_brca")
-    spatial_dir = Path("data/processed/generator/spatial_maps")
+    spatial_dir = Path("data/processed/conditions/spatial_maps")
     OUTPUT_DIR = Path("artifacts/runs/legacy_phase2_controlnet/evaluation")
     NUM_IMAGES = 2000
     BATCH_SIZE = 8

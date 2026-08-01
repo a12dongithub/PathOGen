@@ -6,8 +6,7 @@ This guide supplies the pathology and machine-learning context needed to work on
 
 ```mermaid
 flowchart LR
-    A["H&E whole-slide image"] --> B["512 x 512 tile"]
-    B --> C["Weak nucleus annotations"]
+    B["Prepared 512 x 512 H&E tile"] --> C["Weak nucleus annotations"]
     C --> D["5 spatial heatmaps"]
     B --> E["16 morphology / stain statistics"]
     D --> F["Conditioned diffusion generator"]
@@ -41,7 +40,7 @@ The embedding is a compact vector intended to retain useful visual information. 
 Important limits:
 
 - “Foundation” describes a pretraining strategy and intended reuse; it does not guarantee clinical validity, fairness, or robustness at a new hospital.
-- A tile encoder does not automatically understand an entire whole-slide image. Slide-level work needs tiling and an aggregation method.
+- A tile encoder does not automatically understand an entire whole-slide image. Slide-level work needs a separately defined sampling and aggregation method.
 - A useful embedding can encode nuisance factors such as stain, scanner, tissue preparation, or site.
 - A classifier trained on top of an embedding inherits both the encoder's biases and the label/split quality of the downstream dataset.
 - An image-based prediction of a molecular label is a research estimate, not a molecular assay.
@@ -54,7 +53,7 @@ The [UNI2-h model card](https://huggingface.co/MahmoodLab/UNI2-h) describes a la
 
 **Histopathology** is the microscopic study of tissue to understand disease. A biopsy or surgical specimen is fixed, processed, embedded, cut into a very thin section, placed on a glass slide, stained, and examined by a pathologist. A scanner converts the glass slide into a **whole-slide image (WSI)**.
 
-A WSI is too large to pass through most neural networks at once, so software extracts smaller **tiles** or **patches**. In this project, the principal tile size is 512 x 512 pixels. Pixel count alone does not define physical scale: micrometres per pixel (MPP), objective magnification, and any resizing must also be recorded. A 512-pixel tile at one MPP can cover a very different tissue area from a 512-pixel tile at another MPP.
+CPathoGen does not process WSI files. It receives prepared **tiles** or **patches**, principally 512 x 512 pixels. Pixel count alone does not define physical scale: micrometres per pixel (MPP), objective magnification, and any resizing must also be recorded. A 512-pixel tile at one MPP can cover a very different tissue area from a 512-pixel tile at another MPP.
 
 The data hierarchy matters:
 

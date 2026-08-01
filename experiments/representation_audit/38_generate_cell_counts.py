@@ -15,7 +15,7 @@ def main():
     os.makedirs(METRICS_DIR, exist_ok=True)
     os.makedirs(FIGURES_DIR, exist_ok=True)
     GEOJSON_DIR = r"data/interim/annotations/tcga_brca/geojson"
-    MORPH_PATH = r"data/processed/generator/morphology_features/morphology_standardized.parquet"
+    MORPH_PATH = r"data/processed/conditions/morphology/standardized.parquet"
     OUT_MORPH_PATH = r"data/processed/classification/tcga_subtypes/features/morphology_with_counts.parquet"
     
     # Load existing morph stats

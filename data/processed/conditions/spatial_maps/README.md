@@ -1,4 +1,4 @@
-# Five-channel spatial maps — missing
+# Five-channel spatial maps
 
 Generate one `<tile-stem>.npz` file per annotated tile using
 `python -m cpathogen.preprocessing.spatial_maps`. Each NPZ must contain key

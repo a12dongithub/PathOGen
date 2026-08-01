@@ -20,7 +20,7 @@ TCGA_TILES = DATA_ROOT / "interim" / "tiles" / "tcga_brca"
 TCGA_GEOJSON = (
     DATA_ROOT / "interim" / "annotations" / "tcga_brca" / "geojson"
 )
-GENERATOR_ROOT = DATA_ROOT / "processed" / "generator"
-SPATIAL_MAPS = GENERATOR_ROOT / "spatial_maps"
-MORPHOLOGY_FEATURES = GENERATOR_ROOT / "morphology_features"
-GENERATOR_MANIFESTS = GENERATOR_ROOT / "manifests"
+CONDITIONS_ROOT = DATA_ROOT / "processed" / "conditions"
+SPATIAL_MAPS = CONDITIONS_ROOT / "spatial_maps"
+MORPHOLOGY_DIR = CONDITIONS_ROOT / "morphology"
+CONDITIONS_METADATA = CONDITIONS_ROOT / "metadata.jsonl"

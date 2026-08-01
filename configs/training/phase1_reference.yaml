@@ -10,7 +10,7 @@ learning_rate: 1.0e-5
 lr_scheduler: constant_with_warmup
 lr_warmup_steps: 1000
 checkpointing_steps: 10000
-metadata_file: data/processed/generator/manifests/metadata.jsonl
+metadata_file: data/processed/conditions/metadata.jsonl
 output_directory: artifacts/runs/phase1_domain_adapt
 gradient_checkpointing: true
 use_ema: true

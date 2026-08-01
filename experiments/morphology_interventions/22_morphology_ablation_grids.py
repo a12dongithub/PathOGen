@@ -22,8 +22,8 @@ from cpathogen.generation.phase2 import SpatialCondEncoder, inject_film_into_une
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 WEIGHT_DTYPE = torch.float16
 
-SPATIAL_DIR = r"data/processed/generator/spatial_maps"
-MORPH_STATS_PATH = r"data/processed/generator/morphology_features/morphology_standardized.parquet"
+SPATIAL_DIR = r"data/processed/conditions/spatial_maps"
+MORPH_STATS_PATH = r"data/processed/conditions/morphology/standardized.parquet"
 
 OUTPUT_DIR = r"artifacts/runs/morphology_ablation"
 os.makedirs(OUTPUT_DIR, exist_ok=True)

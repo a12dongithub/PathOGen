@@ -1,4 +1,4 @@
-"""Workflow 07: extract UNI2-h, CTransPath, and ResNet50 embeddings.
+"""Workflow 06: extract UNI2-h, CTransPath, and ResNet50 embeddings.
 
 TODO: orchestrate configured encoder adapters and write task-specific feature
 tables with tile, slide, patient, label, and split identifiers.

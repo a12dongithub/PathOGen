@@ -1,4 +1,4 @@
-"""Workflow 06: generate matched baseline/counterfactual images.
+"""Workflow 05: generate matched baseline/counterfactual images.
 
 TODO: expose a portable CLI around cpathogen.generation.inference and the
 counterfactual intervention/pair modules. Checkpoint-specific scripts are in
