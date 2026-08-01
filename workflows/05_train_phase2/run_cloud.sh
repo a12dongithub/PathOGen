@@ -1,0 +1,152 @@
+#!/bin/bash
+# PathOGen Cloud Training (Conda)
+# Target: 8x NVIDIA Tesla V100 32GB, ~1M H&E tiles
+# Experiment: Spatial concat conditioning + 16D morphology FiLM
+
+set -e  # Exit on first error
+
+PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+cd "$PROJECT_ROOT"
+export PYTHONPATH="$PROJECT_ROOT/src${PYTHONPATH:+:$PYTHONPATH}"
+
+echo "=========================================================="
+echo "PathOGen: H&E Generation with Spatial Layout Control"
+echo "=========================================================="
+
+eval "$(conda shell.bash hook)"
+
+# ── 1. Environment Setup ──
+ENV_PREFIX="${CPATHOGEN_ENV_PREFIX:-$PROJECT_ROOT/.envs/pathogen}"
+echo "[1/6] Creating conda environment at $ENV_PREFIX ..."
+if [ -d "$ENV_PREFIX" ] && [ -f "$ENV_PREFIX/bin/python" ]; then
+    echo "Environment at $ENV_PREFIX already exists. Skipping creation."
+else
+    conda create --prefix "$ENV_PREFIX" python=3.10 -y
+fi
+conda activate "$ENV_PREFIX"
+
+echo "[2/6] Installing dependencies..."
+# PyTorch stable with CUDA 11.8 for V100 (Volta sm_70)
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+# Using latest diffusers/transformers. Removing xformers to rely on PyTorch 2.0+ native SDPA
+pip install -q diffusers==0.30.2 transformers==4.44.2 accelerate scipy pandas pyarrow torchmetrics torch-fidelity \
+    numba opencv-python-headless datasets bitsandbytes scikit-learn joblib tqdm "numpy<2"
+
+# Clean up any residual config from newer versions to prevent unknown key errors
+ACCELERATE_CONFIG_HOME="${HF_HOME:-$PROJECT_ROOT/.cache/huggingface}"
+rm -f "$ACCELERATE_CONFIG_HOME/accelerate/default_config.yaml"
+rm -f ~/.cache/huggingface/accelerate/default_config.yaml
+accelerate config default
+
+# ── 2. Data Preprocessing (precomputed, not during training) ──
+echo "[3/6] Precomputing spatial maps..."
+SPATIAL_DIR="./data/processed/generator/spatial_maps"
+MORPH_DIR="./data/processed/generator/morphology_features"
+MANIFEST_DIR="./data/processed/generator/manifests"
+TILES_DIR="./data/interim/tiles/tcga_brca"
+GEOJSON_DIR="./data/interim/annotations/tcga_brca/geojson"
+
+if [ ! -d "$SPATIAL_DIR" ] || [ -z "$(find "$SPATIAL_DIR" -maxdepth 1 -name '*.npz' -print -quit 2>/dev/null)" ]; then
+    python -m cpathogen.preprocessing.spatial_maps \
+        --geojson-dir="$GEOJSON_DIR" \
+        --output-dir="$SPATIAL_DIR" \
+        --n_jobs=32
+else
+    echo "Spatial maps already exist. Skipping."
+fi
+
+# spatial_maps.py skips existing NPZ outputs, so it safely resumes.
+
+if [ ! -f "$MANIFEST_DIR/metadata.jsonl" ]; then
+    python -m cpathogen.preprocessing.metadata \
+        --tiles-dir="$TILES_DIR" \
+        --output="$MANIFEST_DIR/metadata.jsonl"
+else
+    echo "Metadata already exists. Skipping."
+fi
+
+if [ ! -f "$MORPH_DIR/morphology_standardized.parquet" ]; then
+    mkdir -p "$MORPH_DIR"
+    python -m cpathogen.preprocessing.morphology_features \
+        --image-dir="$TILES_DIR" \
+        --geojson-dir="$GEOJSON_DIR" \
+        --raw-output="$MORPH_DIR/morphology_raw.parquet" \
+        --output="$MORPH_DIR/morphology_standardized.parquet" \
+        --scaler-output="$MORPH_DIR/scaler.joblib" \
+        --manifest-output="$MORPH_DIR/feature_manifest.json" \
+        --n_jobs=32
+else
+    echo "Morphology features already exist. Skipping."
+fi
+
+# HuggingFace requires a source build of diffusers because of a hardcoded version string check.
+# We comment out that single line dynamically so it works on pip installations.
+sed -i 's/check_min_version("0.37.0.dev0")/# check_min_version("0.37.0.dev0")/g' src/cpathogen/generation/phase1.py
+
+# ── 3. Phase 1: Domain Adaptation ──
+# Fine-tunes SD2.1 UNet to generate H&E tissue textures.
+# Text prompt is constant ("he") for ALL samples — the model learns
+# unconditional H&E generation, NOT text-conditioned generation.
+# Use all 8 V100 GPUs
+export CUDA_VISIBLE_DEVICES="0,1,2,3,4,5,6,7"
+# export CUDA_VISIBLE_DEVICES="0"
+
+echo "[4/6] Phase 1: Domain adaptation (unconditional H&E generation)..."
+# Phase 1 is already complete — uncomment to re-run if needed
+# accelerate launch --multi_gpu --num_processes=8 src/cpathogen/generation/phase1.py \
+#     --pretrained_model_name_or_path='Manojb/stable-diffusion-2-1-base' \
+#     --metadata_file='./data/processed/generator/manifests/metadata.jsonl' \
+#     --train_data_dir="$TILES_DIR" \
+#     --use_ema \
+#     --resolution=512 \
+#     --train_batch_size=8 \
+#     --gradient_accumulation_steps=1 \
+#     --gradient_checkpointing \
+#     --max_train_steps=100000 \
+#     --learning_rate=1e-5 \
+#     --lr_scheduler='constant_with_warmup' \
+#     --lr_warmup_steps=1000 \
+#     --checkpointing_steps=10000 \
+#     --resume_from_checkpoint='latest' \
+#     --output_dir='./artifacts/runs/phase1_domain_adapt' \
+#     --use_8bit_adam \
+#     --allow_tf32 \
+#     --dataloader_num_workers=32 \
+#     --report_to='tensorboard' \
+#     --tracker_project_name='pathogen-phase1'
+
+# ── 4. Phase 2: Concat Conditioning (Direct spatial map input to UNet) ──
+# Spatial maps are encoded to latent size by a small CNN and concatenated
+# with the noisy latents as extra UNet input channels (4→8 ch conv_in).
+# Full UNet + SpatialCondEncoder training at LR 1e-5.
+# FRESH START from Phase 1 checkpoint-30000 (best FID).
+echo "[5/6] Phase 2: Spatial concat conditioning + 16D morphology FiLM..."
+accelerate launch --multi_gpu --num_processes=8 src/cpathogen/generation/phase2.py \
+    --pretrained_model_name_or_path='Manojb/stable-diffusion-2-1-base' \
+    --phase1_unet_checkpoint='./artifacts/runs/phase1_domain_adapt/checkpoints/checkpoint-30000' \
+    --output_dir='./artifacts/runs/phase2_concat_film' \
+    --train-tiles-dir="$TILES_DIR" \
+    --train-spatial-maps-dir="$SPATIAL_DIR" \
+    --train-morphology-table="$MORPH_DIR/morphology_standardized.parquet" \
+    --resolution=512 \
+    --learning_rate=8e-6 \
+    --min_learning_rate=1e-7 \
+    --phase2_unet_lr_scale=0.3 \
+    --phase2_spatial_lr_scale=1.0 \
+    --lr_scheduler='cosine' \
+    --lr_warmup_steps=1000 \
+    --train_batch_size=2 \
+    --gradient_accumulation_steps=4 \
+    --gradient_checkpointing \
+    --max_train_steps=50000 \
+    --checkpointing_steps=5000 \
+    --use_8bit_adam \
+    --allow_tf32 \
+    --dataloader_num_workers=2 \
+    --report_to='tensorboard' \
+    --tracker_project_name='pathogen-phase2-morphfilm'
+
+echo "[6/6] Training complete!"
+echo "  Phase 1: ./artifacts/runs/phase1_domain_adapt/"
+echo "  Phase 2: ./artifacts/runs/phase2_concat_film/"
+echo "  TensorBoard logs: tensorboard --logdir ./artifacts/runs/"

@@ -1,20 +1,47 @@
-# Ignore everything by default
-*
-
-# Do NOT ignore directories (so git can traverse to find allowed files)
-!*/
-
-# Explicitly allow python and shell scripts, and gitignore
-!*.py
-!*.sh
-!.gitignore
-
-# Explicitly ignore local-only evaluation scripts and results
-eval_fid*.py
-*_results/
-*_eval.py
-
-# Explicitly ignore common Python/OS junk, just in case
+# Python and local environments
 __pycache__/
 *.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# Editors and operating-system files
 .DS_Store
+Thumbs.db
+*.swp
+*.swo
+.idea/
+.vscode/
+
+# Large or generated material; retain README placeholders and small manifests in Git
+data/**
+!data/**/
+!data/**/README.md
+!data/manifests/**
+!data/raw/bach/labels.csv
+!data/raw/tcga_brca/molecular_subtypes.csv
+!data/processed/classification/**/manifests/**
+
+artifacts/**
+!artifacts/**/
+!artifacts/**/README.md
+archive/
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+*.joblib
+*.zip
+
+# Generated reports
+reports/figures/
+reports/tables/
+reports/posters/
+reports/manuscripts/
+
+# Local logs and secrets
+*.log
+.env
+.env.*

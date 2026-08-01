@@ -1,0 +1,26 @@
+schema_version: 2
+datasets:
+  pannuke:
+    path: data/raw/pannuke
+    status: present
+    role: legacy_or_alternative_nucleus_segmentation
+  bach_source:
+    path: data/raw/bach/images
+    labels: data/raw/bach/labels.csv
+    status: present
+    role: four_class_breast_histology
+  bach_tiles:
+    path: data/interim/tiles/bach
+    status: present
+    role: derived_tile_classification_data
+  tcga_cached_tensors:
+    path: data/misc/tcga_10k_cached_tensors
+    manifest: data/processed/classification/tcga_subtypes/manifests/legacy_10k_samples.csv
+    status: present_with_incomplete_provenance
+    role: legacy_cached_features_and_activations
+  tcga_brca_main:
+    slides: data/raw/tcga_brca/slides
+    tiles: data/interim/tiles/tcga_brca
+    geojson: data/interim/annotations/tcga_brca/geojson
+    status: missing
+    role: generator_and_subtype_cohort
