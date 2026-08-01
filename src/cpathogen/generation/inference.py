@@ -263,7 +263,12 @@ def generate_concat_conditioned(unet, vae, spatial_encoder, text_encoder, tokeni
         
         # Decode latents to images
         latents_for_decode = latents / vae.config.scaling_factor
-        images = vae.decode(latents_for_decode, return_dict=False)[0]
+        # Match the decoder input to the VAE weights. Colab loads the VAE in
+        # FP16, while CPU/debug runs may use FP32.
+        vae_dtype = next(vae.parameters()).dtype
+        images = vae.decode(
+            latents_for_decode.to(dtype=vae_dtype), return_dict=False
+        )[0]
         
         # Convert to PIL (VAE output is in [-1, 1])
         images = (images / 2 + 0.5).clamp(0, 1)
