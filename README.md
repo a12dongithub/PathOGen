@@ -1,66 +1,131 @@
 # CPathoGen
 
-CPathoGen is a research prototype for generating controllable 512 x 512 H&E histopathology tiles and using them as counterfactuals to probe pathology vision models. The intended controls are cellular spatial organization and tile-level nuclear morphology/stain statistics.
+CPathoGen is a research prototype for generating controllable 512 × 512 H&E
+histopathology tiles and using matched counterfactuals to study pathology vision
+models. It is not a clinical system.
 
-> **Research status:** this repository is an experimental workspace, not a packaged library or clinical system. It contains source code, copied third-party projects, datasets, checkpoints, generated outputs, archives, posters, and administrative files. Read [Known issues](docs/reference/known-issues.md) before running or citing results.
+## Active scope
 
-## What the project does
+Five workflows are active:
 
-1. Accept prepared `512 x 512` H&E tiles as input.
-2. Obtain weak nucleus locations and cell types from a segmentation/classification system.
-3. Convert those annotations into five-channel cellular spatial maps and a 16-value morphology/stain vector.
-4. Adapt a Stable Diffusion 2.1 backbone to H&E in a first training phase.
-5. Add spatial and morphology conditioning in a second phase.
-6. Generate controlled counterfactual tiles.
-7. Measure how foundation encoders and downstream breast-cancer classifiers react to the controlled changes.
-
-The current training code implements spatial conditioning with a small CNN whose output is concatenated with the noisy diffusion latents, plus FiLM modulation for the 16-value vector. Some posters and older artifacts call the spatial component “ControlNet”; that naming does not match the current `phase2.py` implementation. See [Architecture: implementation versus research narrative](docs/architecture/system.md#implementation-versus-research-narrative).
-
-## Start here
-
-| Document | Purpose |
-|---|---|
-| [Documentation index](docs/README.md) | Reading order and document ownership |
-| [Background for engineers](docs/onboarding/background.md) | H&E, pathology vocabulary, foundation models, datasets, metrics, and responsible interpretation |
-| [Project overview](docs/onboarding/project-overview.md) | Research question, scope, data, outputs, and current status |
-| [Architecture](docs/architecture/system.md) | End-to-end pipeline, tensor shapes, model phases, and inference |
-| [Repository map](docs/reference/repository-map.md) | What every major folder and script family means |
-| [Setup and workflows](docs/guides/setup-and-workflows.md) | Environment, expected data layout, preprocessing, training, and evaluation |
-| [Known issues](docs/reference/known-issues.md) | Reproducibility gaps, version conflicts, hard-coded paths, and risks |
-| [Paper experiment registry](docs/research/paper-experiments.md) | Planned generator, probing, statistical, and paper experiments |
-
-## Repository at a glance
-
-| Path | Role | Treat as |
+| Workflow | Purpose | Status |
 |---|---|---|
-| `src/cpathogen/` | Generator preprocessing/training/evaluation and encoder modules | Canonical source |
-| `workflows/` | Numbered operational entry points | Intended workflow layer; incomplete |
-| `experiments/` | Foundation-model benchmarks, counterfactual probes, and representation audits | Historical experiment records; paths now use the common layout but remain lightly validated |
-| `data/` | PanNuke, BACH, TCGA intermediate tensors, features, and small manifests | Local data; main TCGA generation cohort remains incomplete |
-| `artifacts/` | Checkpoints, fitted models, generated images, metrics, and historical results | Outputs with incomplete provenance |
-| `third_party/nuhtc/` | Bundled NuHTC/MMDetection nuclei-segmentation project | Third-party/legacy segmentation code |
-| `reports/` | Posters, figures, and manuscripts | Narrative/output material |
-| `archive/` | Duplicate source, administrative records, caches, and ZIP snapshots | Non-canonical cold storage |
+| `01_annotate_nuclei` | Run CellViT++ on source tiles or generated matched pairs and write nucleus GeoJSON | Implemented and tested on Apple MPS |
+| `02_build_conditions` | Build five spatial maps, 16 morphology/stain values, scaler, and metadata | Implemented and tested on the six-tile fixture |
+| `03_train_phase1` | Adapt the four-channel diffusion UNet to H&E tiles | Implemented; data validation and a real MPS forward pass tested |
+| `04_train_phase2` | Train spatial-concat and morphology-FiLM conditioning | Implemented; data validation and a real MPS forward pass tested |
+| `05_generate_counterfactuals` | Apply Python interventions in memory and generate matched baseline/counterfactual images | Implemented and tested on Apple MPS |
 
-The workspace was approximately 191 GB when documented on 2026-07-26. About 92 GB is now isolated under `archive/workspace_snapshots/`, with other large datasets and model artifacts separated from source.
+Workflows 06–08 and their unimplemented modules were removed. The original
+training scripts remain archived as provenance; workflows 03 and 04 are clean
+implementations of their supported contracts.
 
-## Current evidence and claims
+```text
+prepared H&E tiles
+    → 01 CellViT++ nucleus GeoJSON
+    → 02 spatial + morphology/stain conditions
+    → 03 H&E domain adaptation
+    → 04 structured-conditioning training
+    → 05 matched counterfactual generation
+    → 01 repeat CellViT++ annotation on generated images
+```
 
-- The CVPR 2026 poster describes training on roughly one million TCGA-BRCA tiles from 1,114 slides and reports an approximate FID of 56 for the adapted generator.
-- The older abstract records preliminary FID values of about 62 for the phase-1 LDM and about 102 for early conditional training at 15k steps.
-- A stored legacy ControlNet evaluation reports FID 480.8966 and should not be confused with the later concat-conditioned checkpoint or the poster result.
-- Downstream artifacts compare UNI2-h, CTransPath, and ResNet50 representations/classifiers and contain color, morphology, noise, spatial, and layerwise sensitivity experiments.
+The repeated annotation produces measurements and pair provenance; it does not
+by itself establish counterfactual fidelity or biological causality.
 
-These are preliminary research artifacts, not independently reproduced benchmarks. The recommended validation plan is in the [paper experiment registry](docs/research/paper-experiments.md).
+## Documentation
 
-## Reproducibility warning
+The project documentation is deliberately independent of repository mechanics:
 
-There is not yet a clean one-command local setup. The generator cloud script pins its main packages, but the full workspace has no root dependency lockfile. The refactored phase-2 entry point accepts explicit tile, spatial-map, and morphology paths and preprocessing now writes a scaler, but the complete million-tile training dataset and CellViT++ implementation are still absent. Follow [Setup and workflows](docs/guides/setup-and-workflows.md) and resolve the remaining blockers in [Known issues](docs/reference/known-issues.md) before launching a costly run.
+| Document | Contents |
+|---|---|
+| [Project](docs/PROJECT.md) | Scientific question, pathology background, terminology, models, datasets, metrics, and preliminary evidence |
+| [Method](docs/METHOD.md) | Annotation, condition construction, direct-concat-plus-FiLM generator, tensor contracts, inference, and evaluation model |
+| [Experiments](docs/EXPERIMENTS.md) | Complete generator/probing plan, baselines, statistical protocol, paper plan, and run template |
+| [Limitations](docs/LIMITATIONS.md) | Claim boundaries, unresolved validity/reproducibility issues, licenses, and reporting rules |
 
-## Responsible use
+Operational commands and file layouts live beside each workflow rather than in
+the scientific documentation.
 
-CPathoGen is for research into generative pathology, robustness, and model explanation. Generated images are synthetic and must not be used for diagnosis, treatment decisions, or clinical validation without an appropriately designed study and expert review. Preserve TCGA and other dataset licenses/terms, avoid publishing patient-linked metadata, and report failed generations and filtering criteria alongside successful examples.
+## Active repository layout
 
-## License and citation
+```text
+refactored/
+├── src/cpathogen/
+│   ├── annotation/              # Workflow 01 adapter and GeoJSON contract
+│   ├── preprocessing/           # Workflow 02 condition builders
+│   ├── counterfactuals/         # Workflow 05 condition/intervention contracts
+│   ├── generation/              # Workflow 05 checkpoint loading and sampling
+│   │   └── conditioning/        # spatial encoder and FiLM compatibility
+│   ├── training/                # Workflows 03/04 datasets and trainers
+│   └── utils/paths.py           # shared repository-relative paths
+├── workflows/
+│   ├── 01_annotate_nuclei/
+│   ├── 02_build_conditions/
+│   ├── 03_train_phase1/
+│   ├── 04_train_phase2/
+│   └── 05_generate_counterfactuals/
+├── experiments/                 # active Workflow 05 intervention plugins
+├── configs/                     # active data/model/experiment contracts
+├── data/                        # six aligned TCGA tiles, GeoJSON, and conditions
+├── artifacts/
+│   ├── models/                  # CellViT++, Phase-1, and Phase-2 checkpoints
+│   └── runs/                    # new training/generation outputs
+├── tests/                       # active unit and checkpoint integration checks
+├── third_party/cellvit_plus_plus/
+├── docs/                        # four project documents plus report assets
+└── archive/                     # historical code, data, models, results, and docs
+```
 
-The workspace does not currently contain a project-level license or a formal CPathoGen citation. Individual components and datasets have their own terms, including the bundled NuHTC/MMDetection licenses and the PanNuke dataset card. Add a root license, third-party notices, data-use statement, model-card information, and a citation file before public release.
+## Installation
+
+Use separate optional dependency groups:
+
+```bash
+pip install -e ".[annotation]"      # Workflow 01
+pip install -e ".[preprocessing]"   # Workflow 02
+pip install -e ".[training]"        # Workflows 03 and 04
+pip install -e ".[inference]"       # Workflow 05
+```
+
+Run commands from the repository root. Detailed examples are in the workflow
+READMEs:
+
+- [Workflow 01](workflows/01_annotate_nuclei/README.md)
+- [Workflow 02](workflows/02_build_conditions/README.md)
+- [Workflow 03](workflows/03_train_phase1/README.md)
+- [Workflow 04](workflows/04_train_phase2/README.md)
+- [Workflow 05](workflows/05_generate_counterfactuals/README.md)
+
+## Models and local fixture
+
+The active repository expects:
+
+```text
+artifacts/models/cellvit_plus_plus/cellvit_sam_h_x40_amp_001/model.pth
+artifacts/models/pathogen_phase1/checkpoint_30000/unet/
+artifacts/models/pathogen_phase2/checkpoint_30000/
+data/interim/tiles/tcga_brca/
+data/interim/annotations/tcga_brca/geojson/
+data/processed/conditions/
+```
+
+The included six-tile fixture is for integration checks, including training
+forward passes. It is not a training or scientific validation cohort. Large
+model files are ignored by ordinary Git and require an approved model registry
+or Git LFS for distribution.
+
+## Archive policy
+
+Substantive historical material was preserved by category under `archive/`.
+Unimplemented placeholder modules and regenerable caches were deleted. Archived
+code and results are not supported entry points and may have incomplete
+provenance. Large archived data/models remain ignored by Git.
+
+## Responsible use, license, and citation
+
+Synthetic images and model outputs must not be used for diagnosis or treatment.
+The project does not yet have a finalized root license or citation file. Every
+dataset, checkpoint, and third-party component retains its own terms. In
+particular, review the CellViT++ license and mandatory CellViT/CellViT++ citation
+requirements before use or redistribution.

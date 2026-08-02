@@ -1,17 +1,9 @@
 schema_version: 2
-status: reference_not_yet_wired
+status: active_path_and_tensor_contract
 data_root: "${CPATHOGEN_DATA_ROOT:-data}"
-
-raw:
-  tcga_clinical: data/raw/tcga_brca/clinical
-  tcga_subtypes: data/raw/tcga_brca/molecular_subtypes.csv
-  bach_images: data/raw/bach/images
-  bach_labels: data/raw/bach/labels.csv
-  pannuke: data/raw/pannuke
 
 interim:
   tcga_tiles: data/interim/tiles/tcga_brca
-  bach_tiles: data/interim/tiles/bach
   tcga_geojson: data/interim/annotations/tcga_brca/geojson
 
 conditions:
@@ -21,10 +13,6 @@ conditions:
   morphology_scaler: data/processed/conditions/morphology/scaler.joblib
   morphology_manifest: data/processed/conditions/morphology/feature_manifest.json
   metadata: data/processed/conditions/metadata.jsonl
-
-classification:
-  bach: data/processed/classification/bach
-  tcga_subtypes: data/processed/classification/tcga_subtypes
 
 spatial_map:
   height: 512

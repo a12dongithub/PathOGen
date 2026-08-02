@@ -1,3 +1,5 @@
-# Experiment configuration
+# Counterfactual experiment configuration
 
-Add one immutable configuration per experiment ID after the historical hard-coded paths have been traced. Link each file to `experiments/registry.yaml` and write outputs under `artifacts/runs/<experiment_id>/`.
+Experiment behavior is defined in versioned Python modules under `experiments/`.
+Runtime selections are command-line arguments recorded in each Workflow 05 run
+manifest; transformed condition files are not written.

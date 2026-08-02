@@ -1,5 +1,5 @@
 schema_version: 1
-status: reference_not_yet_wired
+status: active_workflow_05_checkpoint_contract
 architecture: direct_concat_spatial_encoder_plus_film
 base_model: Manojb/stable-diffusion-2-1-base
 resolution: 512
@@ -13,5 +13,5 @@ film_clamp:
   minimum: -0.5
   maximum: 0.5
 notes:
-  - This describes the current phase2.py implementation, not ControlNet.
-  - VAE and text encoder are frozen in the documented training setup.
+  - This describes the supported Workflow 05 checkpoint, not ControlNet.
+  - The inference bundle includes the frozen VAE, tokenizer, text encoder, and scheduler.

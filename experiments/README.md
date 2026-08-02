@@ -1,35 +1,40 @@
-# Experiments
+# Counterfactual experiments
 
-Historical numbered scripts are grouped by scientific purpose without changing their filenames. CPathoGen paths were normalized to the canonical data/artifact layout, but the scripts remain experiment records and have not been scientifically rerun after migration. See `registry.yaml` and the paper experiment registry under `docs/research/`.
+Active experiments contain only Python definitions of how the two Phase-2
+controls are transformed. Reusable model and data code lives in `src/cpathogen/`;
+checkpoint loading, matched-noise generation, and artifact writing live in
+`workflows/05_generate_counterfactuals/`.
 
-Reusable model and training components live under `src/cpathogen/`; experiment-specific entry points and notebooks live here.
+Each module exposes:
 
-## Experiment 01: conditional inference smoke test
-
-Recommended Colab GPU: **L4**. It has enough VRAM for 512×512 PathOGen inference and is generally a better value than using A100/H100 for a one-image smoke test. T4 is supported but slower; A100/H100 are supported but unnecessary for this test.
-
-Open `PathOGen_Inference_L4.ipynb` in Colab, select a GPU runtime, and choose **Runtime → Run all**. The notebook:
-
-1. Clones the selected Git branch/commit.
-2. Verifies the assigned GPU.
-3. Installs pinned inference dependencies without replacing Colab's CUDA PyTorch.
-4. Downloads the dataset and checkpoint ZIPs from Google Drive.
-5. Safely extracts them and deletes the archives to conserve disk.
-6. Finds the nested dataset/checkpoint directories by their contents.
-7. Generates a deterministic conditional H&E sample.
-8. Saves the generated image, source image, spatial map, comparison grid, and JSON manifest.
-
-For final paper runs, set `GIT_REF` to a commit SHA rather than a moving branch name.
-
-The Drive links must be shared so the Colab account can download them. The full extracted assets need roughly 31 GiB; the script checks free disk before downloading.
-
-Command-line use inside Colab:
-
-```bash
-python experiments/01_inference_smoke.py \
-  --data-url "https://drive.google.com/file/d/FILE_ID/view" \
-  --model-url "https://drive.google.com/file/d/FILE_ID/view" \
-  --num-images 1 \
-  --steps 20 \
-  --seed 42
+```python
+def build_interventions() -> list[ConditionIntervention]:
+    ...
 ```
+
+An intervention subclasses `ConditionIntervention` and overrides
+`modify_spatial(...)`, `modify_morphology(...)`, or both. The inherited method is
+an identity transform. The workflow supplies cloned tensors and read-only access
+to the aligned condition store, allowing donor swaps and other changes without
+creating a new GeoJSON, spatial-map, or morphology file for every experiment.
+
+## Promoted historical control experiments
+
+| Active module | Historical behavior represented |
+|---|---|
+| `spatial.full_plane_categories` | Entire-plane neoplastic/inflammatory/connective maps (04) |
+| `spatial.relabel_all_cells` | Relabel the original cell envelope (05/07) |
+| `spatial.rotate_maps` | Spatial rotations by 90/180/270 degrees (08) |
+| `spatial.donor_maps` | Twenty random spatial donor swaps (10) |
+| `spatial.tissue_to_inflammatory` | Progressive neoplastic/epithelial-to-inflammatory shifts (20/21) |
+| `morphology.full_feature_sweep` | All 16 features set to −2…+2 standard deviations (22/23) |
+| `morphology.shape_variance_sweep` | Area/perimeter variance sweep (30) |
+| `morphology.stain_variance_sweep` | RGB variance sweep (27) |
+| `morphology.donor_vectors` | Twenty random morphology donor swaps (11/17/19) |
+| `joint.legacy_morphology_rotation` | Donor swaps plus rotations from experiment 08 |
+| `joint.donor_grid` | Four morphology donors by five spatial donors (16) |
+
+Classifier training, plotting, feature extraction, and representation audits stay
+in `archive/experiments/`. The historical “noise invariance” probe repeats the
+same controls with different diffusion noise, so it is a sampling audit rather
+than a control intervention.

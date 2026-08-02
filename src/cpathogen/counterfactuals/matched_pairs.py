@@ -1,12 +1,24 @@
-"""Matched baseline/counterfactual pair construction.
+"""Serializable records for baseline/counterfactual pairs."""
 
-TODO: pair controls using shared seeds and write an immutable pair manifest.
-"""
+from __future__ import annotations
 
-
-def main() -> None:
-    raise NotImplementedError("TODO: implement matched-pair construction")
+from dataclasses import asdict, dataclass, field
+from typing import Any
 
 
-if __name__ == "__main__":
-    main()
+@dataclass(frozen=True)
+class MatchedPairRecord:
+    """Provenance for two images generated from the same initial noise."""
+
+    stem: str
+    seed: int
+    prompt: str
+    baseline_image: str
+    counterfactual_image: str
+    reference_tile: str | None
+    intervention: dict[str, Any]
+    applied_details: dict[str, Any] = field(default_factory=dict)
+    difference: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)

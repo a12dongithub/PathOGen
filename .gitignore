@@ -20,27 +20,50 @@ Thumbs.db
 data/**
 !data/**/
 !data/**/README.md
-!data/manifests/**
-!data/raw/bach/labels.csv
-!data/raw/tcga_brca/molecular_subtypes.csv
-!data/processed/classification/**/manifests/**
+
+# Small, aligned repository fixture used by workflows 01, 02, and 05
+!data/interim/tiles/tcga_brca/*.png
+!data/interim/annotations/
+!data/interim/annotations/tcga_brca/
+!data/interim/annotations/tcga_brca/geojson/
+!data/interim/annotations/tcga_brca/geojson/*.geojson
+!data/processed/conditions/metadata.jsonl
+!data/processed/conditions/spatial_maps/*.npz
+!data/processed/conditions/morphology/feature_manifest.json
+!data/processed/conditions/morphology/standardized.parquet
 
 artifacts/**
 !artifacts/**/
 !artifacts/**/README.md
-archive/
+
+# Track archived source/docs, but not archived datasets, models, results, smoke
+# outputs, administrative records, or unclassified binary remnants.
+archive/*
+!archive/README.md
+!archive/code/
+!archive/code/**
+!archive/configs/
+!archive/configs/**
+!archive/docs/
+!archive/docs/**
+!archive/experiments/
+!archive/experiments/**
+!archive/legacy_code/
+!archive/legacy_code/**
+!archive/notebooks/
+!archive/notebooks/**
+!archive/tests/
+!archive/tests/**
+!archive/third_party/
+!archive/third_party/**
+!archive/tools/
+!archive/tools/**
 *.pt
 *.pth
 *.ckpt
 *.safetensors
 *.joblib
 *.zip
-
-# Generated reports
-reports/figures/
-reports/tables/
-reports/posters/
-reports/manuscripts/
 
 # Local logs and secrets
 *.log

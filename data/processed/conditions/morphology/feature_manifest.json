@@ -1,0 +1,25 @@
+{
+  "feature_order": [
+    "area_mean",
+    "area_var",
+    "eccentricity_mean",
+    "eccentricity_var",
+    "solidity_mean",
+    "solidity_var",
+    "perimeter_mean",
+    "perimeter_var",
+    "grad_mean",
+    "grad_var",
+    "r_mean",
+    "r_var",
+    "g_mean",
+    "g_var",
+    "b_mean",
+    "b_var"
+  ],
+  "rows": 38978,
+  "source": "/Users/varangrai/Documents/cellpathogen/512_final_dataset/morphology_stats.parquet",
+  "standardized_table": "data/processed/conditions/morphology/standardized.parquet",
+  "normalization": "Pre-standardized using the original full-cohort PathOGen preprocessing; the fitted scaler was not present in the source dataset.",
+  "used_by": "artifacts/models/pathogen_phase2/checkpoint_30000"
+}

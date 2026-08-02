@@ -1,8 +1,13 @@
-"""Workflow 01: run CellViT++ and validate nucleus GeoJSON.
+#!/usr/bin/env python3
+"""Workflow 01: annotate source or generated tiles with CellViT++."""
 
-TODO: provide the missing upstream model, checkpoint, class mapping, and
-provenance before implementing this workflow.
-"""
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPOSITORY_ROOT / "src"))
 
 from cpathogen.annotation.cellvit_adapter import main
 
