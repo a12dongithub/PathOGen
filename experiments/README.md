@@ -100,3 +100,7 @@ pip install -r experiments/requirements_fidelity.txt
 ```
 
 On GTX 16-series cards, both PathOGen and CellViT++ automatically use FP32 because FP16 can produce non-finite tensors. Modern Colab/H200 GPUs use FP16 by default.
+
+## Complete Colab workflow
+
+The `colab-fidelity-experiments` branch includes a large-asset folder layout, automatic setup and download script, environment verifier, combined experiment launcher and a button-by-button notebook. See [`experiments/colab/README.md`](colab/README.md) or open [`PathOGen_Fidelity_Colab.ipynb`](PathOGen_Fidelity_Colab.ipynb).
