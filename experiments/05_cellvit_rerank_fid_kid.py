@@ -102,6 +102,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--kid-subsets", type=int, default=100)
     parser.add_argument("--analysis-only", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--baseline-only",
+        action="store_true",
+        help="Calculate baseline FID/KID and stop before candidate reranking",
+    )
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument(
         "--skip-metrics",
@@ -447,6 +452,7 @@ def main() -> None:
         "generation_batch_size": args.generation_batch_size,
         "cellvit_batch_size": args.cellvit_batch_size,
         "baseline": {"config_id": BASELINE_CONFIG_ID, "seed_index": 0},
+        "baseline_only": args.baseline_only,
         "green_allowed_standardized_range": [green_lower, green_upper],
         "score": {
             "input_cells": "exact source GeoJSON centroids used to create the conditioning map",
@@ -562,6 +568,22 @@ def main() -> None:
         )
         write_json(experiment_dir / "metrics_before_reranking.json", baseline_metrics)
         print(f"[metrics before] {baseline_metrics}", flush=True)
+
+    if args.baseline_only:
+        write_json(
+            experiment_dir / "fid_kid_comparison.json",
+            {
+                "before": baseline_metrics,
+                "after": None,
+                "improvement_lower_is_better": None,
+                "status": "baseline_only",
+            },
+        )
+        print(
+            f"Baseline-only run complete; reusable artifacts written to {experiment_dir}",
+            flush=True,
+        )
+        return
 
     # Phase 2: generate/reuse all candidates, run CellViT++, apply only the
     # requested spatial/type point score, and copy the highest-scoring candidate.

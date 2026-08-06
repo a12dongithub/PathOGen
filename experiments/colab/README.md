@@ -118,6 +118,18 @@ deterministic `torch.Generator`, and batching therefore does not reuse noise acr
 candidates. Score CSVs are checkpointed every 10 completed inputs by default; use
 `--save-every` to change that interval.
 
+Before a large reranking run, verify the baseline metric without generating the
+candidate grid. A later full run with identical arguments reuses these artifacts:
+
+```python
+!python experiments/05_cellvit_rerank_fid_kid.py \
+  --num-images 5000 \
+  --seeds-per-config 8 \
+  --generation-batch-size 4 \
+  --baseline-only \
+  --seed 42
+```
+
 The script reads `assets/runtime_paths.json`, so no asset paths are needed after setup. For each input cell, unique CellViT++ detections are assigned with the following only ranking score:
 
 - same type within 50 pixels: `+1`;
