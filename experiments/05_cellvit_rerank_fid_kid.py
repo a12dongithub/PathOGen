@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Compare baseline FID/KID with best-of-64 CellViT++ spatial reranking."""
+"""Compare baseline FID/KID with CellViT++ spatial reranking at fixed 30 steps."""
 
 from __future__ import annotations
 
@@ -40,20 +40,18 @@ class CandidateConfig:
     denoising_steps: int
 
 
-# Eight fixed configurations are used instead of the 18-member full Cartesian grid,
-# preserving the requested 8 seeds x 8 configurations = 64 candidates per input.
+# Balanced 3x2 factorial design: green offset x spatial-conditioning strength.
+# Denoising is fixed at 30 steps so it is no longer a selection variable.
 DEFAULT_CONFIGS = (
-    CandidateConfig("cfg00_baseline", 0.0, 1.0, 20),
-    CandidateConfig("cfg01_g0_c2_s40", 0.0, 2.0, 40),
+    CandidateConfig("cfg00_g0_c1_s30", 0.0, 1.0, 30),
+    CandidateConfig("cfg01_g0_c2_s30", 0.0, 2.0, 30),
     CandidateConfig("cfg02_gm2_c1_s30", -2.0, 1.0, 30),
-    CandidateConfig("cfg03_gm2_c2_s20", -2.0, 2.0, 20),
-    CandidateConfig("cfg04_gp2_c1_s40", 2.0, 1.0, 40),
+    CandidateConfig("cfg03_gm2_c2_s30", -2.0, 2.0, 30),
+    CandidateConfig("cfg04_gp2_c1_s30", 2.0, 1.0, 30),
     CandidateConfig("cfg05_gp2_c2_s30", 2.0, 2.0, 30),
-    CandidateConfig("cfg06_gm2_c2_s40", -2.0, 2.0, 40),
-    CandidateConfig("cfg07_gp2_c1_s20", 2.0, 1.0, 20),
 )
-SEEDS_PER_CONFIG = 8
-BASELINE_CONFIG_ID = "cfg00_baseline"
+DEFAULT_SEEDS_PER_CONFIG = 8
+BASELINE_CONFIG_ID = "cfg00_g0_c1_s30"
 
 
 def parse_args() -> argparse.Namespace:
@@ -67,6 +65,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--num-images", type=int, default=100)
     parser.add_argument("--stems", nargs="*")
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument(
+        "--seeds-per-config",
+        type=int,
+        default=DEFAULT_SEEDS_PER_CONFIG,
+        help="Deterministic noise seeds evaluated for each parameter configuration",
+    )
     parser.add_argument("--match-radius", type=float, default=50.0)
     parser.add_argument("--green-lower-quantile", type=float, default=0.01)
     parser.add_argument("--green-upper-quantile", type=float, default=0.99)
@@ -85,7 +89,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--cellvit-batch-size",
         type=int,
-        default=8,
+        default=4,
         help="CellViT++ batch size; automatically halved if CUDA runs out of memory",
     )
     parser.add_argument(
@@ -275,6 +279,7 @@ def run_id(
     green_lower_quantile: float,
     green_upper_quantile: float,
     checkpoint_dir: Path,
+    seeds_per_config: int,
 ) -> str:
     payload = {
         "stems": stems,
@@ -283,7 +288,7 @@ def run_id(
         "green_quantiles": [green_lower_quantile, green_upper_quantile],
         "checkpoint_dir": str(checkpoint_dir.expanduser().resolve()),
         "configs": [asdict(config) for config in DEFAULT_CONFIGS],
-        "seeds_per_config": SEEDS_PER_CONFIG,
+        "seeds_per_config": seeds_per_config,
     }
     digest = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:12]
     return f"cellvit_rerank_{digest}"
@@ -396,6 +401,8 @@ def main() -> None:
         raise ValueError("KID subsets must be positive and subset size must be at least two")
     if args.generation_batch_size < 1 or args.cellvit_batch_size < 1:
         raise ValueError("generation and CellViT batch sizes must be positive")
+    if args.seeds_per_config < 1:
+        raise ValueError("seeds-per-config must be positive")
     if args.save_every < 1:
         raise ValueError("save-every must be positive")
 
@@ -406,7 +413,8 @@ def main() -> None:
     if not args.dry_run and not args.skip_metrics and len(stems) < 1000:
         print(
             f"WARNING: FID from {len(stems)} images is preliminary and statistically unstable; "
-            "use a much larger held-out set for paper results.",
+            "use a much larger held-out set for paper results. FID values measured with "
+            "different sample counts or implementations are not directly comparable.",
             flush=True,
         )
     output_root = args.output_dir.expanduser().resolve()
@@ -417,6 +425,7 @@ def main() -> None:
         args.green_lower_quantile,
         args.green_upper_quantile,
         args.checkpoint_dir,
+        args.seeds_per_config,
     )
     args.output_dir = experiment_dir
     experiment_dir.mkdir(parents=True, exist_ok=True)
@@ -430,9 +439,11 @@ def main() -> None:
         "stems": stems,
         "num_inputs": len(stems),
         "configs": [asdict(config) for config in DEFAULT_CONFIGS],
-        "seeds_per_config": SEEDS_PER_CONFIG,
-        "candidates_per_input": len(DEFAULT_CONFIGS) * SEEDS_PER_CONFIG,
-        "total_candidate_images": len(stems) * len(DEFAULT_CONFIGS) * SEEDS_PER_CONFIG,
+        "seeds_per_config": args.seeds_per_config,
+        "candidates_per_input": len(DEFAULT_CONFIGS) * args.seeds_per_config,
+        "total_candidate_images": len(stems)
+        * len(DEFAULT_CONFIGS)
+        * args.seeds_per_config,
         "generation_batch_size": args.generation_batch_size,
         "cellvit_batch_size": args.cellvit_batch_size,
         "baseline": {"config_id": BASELINE_CONFIG_ID, "seed_index": 0},
@@ -448,7 +459,10 @@ def main() -> None:
             "extra_prediction_penalty": 0,
             "tie_break": "first candidate in fixed config/seed order",
         },
-        "fid_kid_warning": "FID is unstable for small num-images; use a large held-out set for paper results.",
+        "fid_kid_warning": (
+            "FID is upward-biased and unstable for small num-images. Compare models only "
+            "with identical sample count, real subset, preprocessing, and implementation."
+        ),
     }
     write_json(experiment_dir / "experiment_manifest.json", manifest)
     if args.dry_run:
@@ -472,8 +486,9 @@ def main() -> None:
                 ):
                     raise AssertionError("Green intervention changed a non-green feature")
         print(
-            f"Dry run passed: {len(stems)} inputs x 8 configs x 8 seeds = "
-            f"{len(stems) * 64} candidates"
+            f"Dry run passed: {len(stems)} inputs x {len(DEFAULT_CONFIGS)} configs "
+            f"x {args.seeds_per_config} seeds = "
+            f"{len(stems) * len(DEFAULT_CONFIGS) * args.seeds_per_config} candidates"
         )
         return
 
@@ -548,7 +563,7 @@ def main() -> None:
         write_json(experiment_dir / "metrics_before_reranking.json", baseline_metrics)
         print(f"[metrics before] {baseline_metrics}", flush=True)
 
-    # Phase 2: generate/reuse all 64 candidates, run CellViT++, apply only the
+    # Phase 2: generate/reuse all candidates, run CellViT++, apply only the
     # requested spatial/type point score, and copy the highest-scoring candidate.
     phase_two = ExperimentRuntime(args)
     all_rows: list[dict[str, Any]] = []
@@ -560,7 +575,7 @@ def main() -> None:
             candidate_order = 0
             for config in DEFAULT_CONFIGS:
                 entries = []
-                for seed_index in range(SEEDS_PER_CONFIG):
+                for seed_index in range(args.seeds_per_config):
                     context, green_details = context_for_candidate(
                         phase_two,
                         stem,

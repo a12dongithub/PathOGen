@@ -124,17 +124,17 @@ class ColabWorkflowTests(unittest.TestCase):
             self.assertEqual(resolved.name, "CellViT-256-x40-AMP.pth")
             self.assertTrue(resolved.is_file())
 
-    def test_rerank_has_eight_configs_covering_requested_levels(self):
+    def test_rerank_has_balanced_fixed_step_configs(self):
         configs = self.rerank.DEFAULT_CONFIGS
-        self.assertEqual(len(configs), 8)
-        self.assertEqual(self.rerank.SEEDS_PER_CONFIG * len(configs), 64)
+        self.assertEqual(len(configs), 6)
+        self.assertEqual(
+            self.rerank.DEFAULT_SEEDS_PER_CONFIG * len(configs), 48
+        )
         self.assertEqual({config.green_sd for config in configs}, {-2.0, 0.0, 2.0})
         self.assertEqual(
             {config.controlnet_strength for config in configs}, {1.0, 2.0}
         )
-        self.assertEqual(
-            {config.denoising_steps for config in configs}, {20, 30, 40}
-        )
+        self.assertEqual({config.denoising_steps for config in configs}, {30})
 
     def test_rerank_batches_preserve_order_and_remainder(self):
         self.assertEqual(

@@ -46,7 +46,7 @@ def add_common_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--cellvit-batch-size",
         type=int,
-        default=8,
+        default=4,
         help="CellViT++ inference batch size; CUDA OOM automatically halves it",
     )
     parser.add_argument(
