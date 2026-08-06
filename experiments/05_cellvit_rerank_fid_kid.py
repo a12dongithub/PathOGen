@@ -40,18 +40,14 @@ class CandidateConfig:
     denoising_steps: int
 
 
-# Balanced 3x2 factorial design: green offset x spatial-conditioning strength.
-# Denoising is fixed at 30 steps so it is no longer a selection variable.
+# Focused design after the first 100-case pilot: spatial-conditioning strength is
+# fixed at 2, denoising at 30 steps, and only neutral/-1 SD green are searched.
 DEFAULT_CONFIGS = (
-    CandidateConfig("cfg00_g0_c1_s30", 0.0, 1.0, 30),
-    CandidateConfig("cfg01_g0_c2_s30", 0.0, 2.0, 30),
-    CandidateConfig("cfg02_gm2_c1_s30", -2.0, 1.0, 30),
-    CandidateConfig("cfg03_gm2_c2_s30", -2.0, 2.0, 30),
-    CandidateConfig("cfg04_gp2_c1_s30", 2.0, 1.0, 30),
-    CandidateConfig("cfg05_gp2_c2_s30", 2.0, 2.0, 30),
+    CandidateConfig("cfg00_g0_c2_s30", 0.0, 2.0, 30),
+    CandidateConfig("cfg01_gm1_c2_s30", -1.0, 2.0, 30),
 )
 DEFAULT_SEEDS_PER_CONFIG = 8
-BASELINE_CONFIG_ID = "cfg00_g0_c1_s30"
+BASELINE_CONFIG_ID = "cfg00_g0_c2_s30"
 
 
 def parse_args() -> argparse.Namespace:

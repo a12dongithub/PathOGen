@@ -93,9 +93,9 @@ Run individual experiments when needed:
 
 The spatial experiments deliberately share one output directory, so coordinate analysis reuses generated PNGs and CellViT++ GeoJSONs from count fidelity. All scripts resume existing artifacts unless `--overwrite` is supplied.
 
-## CellViT++ best-of-48 FID/KID experiment
+## CellViT++ best-of-16 FID/KID experiment
 
-One entrypoint runs the complete comparison: it generates one fixed baseline image per input and calculates baseline FID/KID, generates and segments 48 candidates per input, selects the highest CellViT++ point score, and calculates FID/KID again on the selected set.
+One entrypoint runs the complete comparison: it generates one fixed baseline image per input and calculates baseline FID/KID, generates and segments 16 candidates per input, selects the highest CellViT++ point score, and calculates FID/KID again on the selected set.
 
 ```python
 !python experiments/05_cellvit_rerank_fid_kid.py \
@@ -138,18 +138,14 @@ The script reads `assets/runtime_paths.json`, so no asset paths are needed after
 
 There is no additional count, morphology or spatial-correlation score. Extra detections are reported but receive no penalty. Tied candidates retain the first fixed configuration/seed order.
 
-The revised design fixes denoising at 30 steps and evaluates the balanced `3 green levels × 2 spatial strengths × 8 seeds = 48` candidates:
+The focused design fixes denoising at 30 steps and spatial strength at 2, then evaluates `2 green levels × 8 seeds = 16` candidates:
 
 | Configuration | Green offset (SD) | ControlNet strength | Denoising steps |
 |---|---:|---:|---:|
-| `cfg00_g0_c1_s30` | 0 | 1 | 30 |
-| `cfg01_g0_c2_s30` | 0 | 2 | 30 |
-| `cfg02_gm2_c1_s30` | -2 | 1 | 30 |
-| `cfg03_gm2_c2_s30` | -2 | 2 | 30 |
-| `cfg04_gp2_c1_s30` | +2 | 1 | 30 |
-| `cfg05_gp2_c2_s30` | +2 | 2 | 30 |
+| `cfg00_g0_c2_s30` | 0 | 2 | 30 |
+| `cfg01_gm1_c2_s30` | -1 | 2 | 30 |
 
-The same eight deterministic noise seeds are reused across all configurations for each input. Use `--seeds-per-config` to reduce or increase that count. Green changes operate on standardized `g_mean` and are clamped to its empirical 1st–99th percentile range. The baseline FID/KID set always uses `cfg00_g0_c1_s30` and seed index zero. Use substantially more than 100 inputs for final paper FID; small runs are useful only for pipeline validation and preliminary KID estimates.
+The same eight deterministic noise seeds are reused across both configurations for each input. Use `--seeds-per-config` to reduce or increase that count. Green changes operate on standardized `g_mean` and are clamped to its empirical 1st–99th percentile range. The baseline FID/KID set always uses `cfg00_g0_c2_s30` and seed index zero. Use substantially more than 100 inputs for final paper FID; small runs are useful only for pipeline validation and preliminary KID estimates.
 
 ## Custom asset locations
 
