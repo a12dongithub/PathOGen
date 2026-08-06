@@ -118,7 +118,16 @@ class ExperimentRuntime:
         self,
         context: GenerationContext,
         artifact_name: str,
+        *,
+        steps: int | None = None,
+        spatial_strength: float | None = None,
     ) -> tuple[Path, dict[str, Any]]:
+        actual_steps = self.args.steps if steps is None else int(steps)
+        actual_spatial_strength = (
+            self.args.spatial_strength
+            if spatial_strength is None
+            else float(spatial_strength)
+        )
         image_path = self.generated_dir / f"{safe_name(artifact_name)}.png"
         metadata_path = self.metadata_dir / f"{safe_name(artifact_name)}.json"
         if image_path.is_file() and not self.args.overwrite:
@@ -132,8 +141,8 @@ class ExperimentRuntime:
             raise FileNotFoundError(f"Required generated artifact missing: {image_path}")
         result = self.generator.generate(
             context,
-            steps=self.args.steps,
-            spatial_strength=self.args.spatial_strength,
+            steps=actual_steps,
+            spatial_strength=actual_spatial_strength,
             hook=self.hook,
             max_attempts=self.args.max_guidance_attempts,
         )
@@ -150,8 +159,8 @@ class ExperimentRuntime:
             "seed": result.context.seed,
             "attempt": result.context.attempt,
             "morphology": result.context.morphology.astype(float).tolist(),
-            "steps": self.args.steps,
-            "spatial_strength": self.args.spatial_strength,
+            "steps": actual_steps,
+            "spatial_strength": actual_spatial_strength,
             "seconds": round(result.seconds, 3),
             "accepted": result.decision.accept,
             "guidance_score": result.decision.score,
@@ -175,3 +184,5 @@ class ExperimentRuntime:
     def close(self) -> None:
         if self._generator is not None:
             self._generator.unload()
+        if self._cellvit is not None:
+            self._cellvit.unload()

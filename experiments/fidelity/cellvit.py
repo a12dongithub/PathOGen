@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gc
 import json
 import sys
 from pathlib import Path
@@ -149,6 +150,13 @@ class CellViTRunner:
         predictions = self._prepare(predictions)
         _, cell_dicts = self.postprocessor.post_process_batch(predictions)
         return cell_dicts[0]
+
+    def unload(self) -> None:
+        self.model = None
+        self.postprocessor = None
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
 
 def save_cellvit_geojson(cells: dict, destination: Path) -> None:

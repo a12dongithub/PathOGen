@@ -14,4 +14,5 @@ safetensors>=0.4,<1
 scikit-image>=0.24,<1
 scipy>=1.13,<2
 timm>=1.0,<2
+torch-fidelity>=0.3,<1
 transformers==4.44.2

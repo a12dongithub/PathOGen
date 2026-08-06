@@ -104,3 +104,5 @@ On GTX 16-series cards, both PathOGen and CellViT++ automatically use FP32 becau
 ## Complete Colab workflow
 
 The `colab-fidelity-experiments` branch includes a large-asset folder layout, automatic setup and download script, environment verifier, combined experiment launcher and a button-by-button notebook. See [`experiments/colab/README.md`](colab/README.md) or open [`PathOGen_Fidelity_Colab.ipynb`](PathOGen_Fidelity_Colab.ipynb).
+
+For the end-to-end baseline FID/KID versus CellViT++ best-of-64 comparison, run `experiments/05_cellvit_rerank_fid_kid.py`. It uses only the requested `+1/0/-1` cell-type and 50-pixel position score.

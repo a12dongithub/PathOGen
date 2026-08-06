@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.util
 import json
 import subprocess
 import sys
@@ -7,6 +8,8 @@ import tempfile
 import unittest
 import zipfile
 from pathlib import Path
+
+import numpy as np
 
 from experiments.colab.layout import (
     REPO_ROOT,
@@ -17,9 +20,34 @@ from experiments.colab.layout import (
     find_dataset,
 )
 from experiments.colab.setup_colab import safe_extract_zip
+from experiments.fidelity.constants import MORPH_FEATURES
+from experiments.fidelity.data import CellObservation
+
+
+def load_rerank_module():
+    script = REPO_ROOT / "experiments" / "05_cellvit_rerank_fid_kid.py"
+    spec = importlib.util.spec_from_file_location("cellvit_rerank_script", script)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Could not load {script}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def observation(cell_type: str, x: float, y: float) -> CellObservation:
+    contour = np.asarray(
+        [[x - 2, y - 2], [x + 2, y - 2], [x + 2, y + 2], [x - 2, y + 2]],
+        dtype=np.float32,
+    )
+    return CellObservation(cell_type=cell_type, centroid=(x, y), contour=contour)
 
 
 class ColabWorkflowTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.rerank = load_rerank_module()
+
     def create_layout(self, root: Path) -> RuntimePaths:
         data = root / "nested" / "512_final_dataset"
         for child in ("images", "spatial_maps", "geojsons"):
@@ -78,6 +106,58 @@ class ColabWorkflowTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 safe_extract_zip(archive, root / "extract")
             self.assertFalse((root / "escape.txt").exists())
+
+    def test_rerank_has_eight_configs_covering_requested_levels(self):
+        configs = self.rerank.DEFAULT_CONFIGS
+        self.assertEqual(len(configs), 8)
+        self.assertEqual(self.rerank.SEEDS_PER_CONFIG * len(configs), 64)
+        self.assertEqual({config.green_sd for config in configs}, {-2.0, 0.0, 2.0})
+        self.assertEqual(
+            {config.controlnet_strength for config in configs}, {1.0, 2.0}
+        )
+        self.assertEqual(
+            {config.denoising_steps for config in configs}, {20, 30, 40}
+        )
+
+    def test_spatial_point_score_is_plus_one_zero_minus_one(self):
+        source = [
+            observation("Neoplastic", 10, 10),
+            observation("Inflammatory", 100, 100),
+            observation("Connective", 300, 300),
+        ]
+        predicted = [
+            observation("Neoplastic", 20, 10),
+            observation("Neoplastic", 105, 100),
+            observation("Epithelial", 500, 500),
+        ]
+        score = self.rerank.score_spatial_cells(source, predicted, radius=50)
+        self.assertEqual(score["same_type_matches"], 1)
+        self.assertEqual(score["different_type_matches"], 1)
+        self.assertEqual(score["missing_matches"], 1)
+        self.assertEqual(score["extra_predictions"], 1)
+        self.assertEqual(score["spatial_points"], 0)
+        self.assertEqual(score["spatial_score"], 0.0)
+
+    def test_spatial_score_uses_each_prediction_once(self):
+        source = [
+            observation("Neoplastic", 10, 10),
+            observation("Neoplastic", 20, 10),
+        ]
+        predicted = [observation("Neoplastic", 15, 10)]
+        score = self.rerank.score_spatial_cells(source, predicted, radius=50)
+        self.assertEqual(score["same_type_matches"], 1)
+        self.assertEqual(score["missing_matches"], 1)
+        self.assertEqual(score["spatial_points"], 0)
+
+    def test_green_change_is_clamped_and_changes_only_green(self):
+        baseline = np.zeros(len(MORPH_FEATURES), dtype=np.float32)
+        changed, details = self.rerank.green_condition(
+            baseline, green_sd=2.0, lower=-1.0, upper=1.0
+        )
+        changed_indices = np.flatnonzero(changed != baseline).tolist()
+        self.assertEqual(changed_indices, [MORPH_FEATURES.index("g_mean")])
+        self.assertEqual(float(changed[MORPH_FEATURES.index("g_mean")]), 1.0)
+        self.assertTrue(details["green_clipped"])
 
     def test_suite_print_only_builds_all_commands(self):
         with tempfile.TemporaryDirectory() as directory:

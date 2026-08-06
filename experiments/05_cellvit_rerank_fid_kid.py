@@ -1,0 +1,608 @@
+#!/usr/bin/env python
+"""Compare baseline FID/KID with best-of-64 CellViT++ spatial reranking."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import math
+import sys
+from dataclasses import asdict, dataclass
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+import pandas as pd
+from PIL import Image
+from scipy.optimize import linear_sum_assignment
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from experiments.colab.layout import DEFAULT_CONFIG, RuntimePaths
+from experiments.fidelity.constants import MORPH_FEATURES
+from experiments.fidelity.data import CellObservation, DatasetCatalog, load_cells
+from experiments.fidelity.guidance import GenerationContext
+from experiments.fidelity.workflow import (
+    ExperimentRuntime,
+    deterministic_seed,
+    write_json,
+)
+
+
+@dataclass(frozen=True)
+class CandidateConfig:
+    config_id: str
+    green_sd: float
+    controlnet_strength: float
+    denoising_steps: int
+
+
+# Eight fixed configurations are used instead of the 18-member full Cartesian grid,
+# preserving the requested 8 seeds x 8 configurations = 64 candidates per input.
+DEFAULT_CONFIGS = (
+    CandidateConfig("cfg00_baseline", 0.0, 1.0, 20),
+    CandidateConfig("cfg01_g0_c2_s40", 0.0, 2.0, 40),
+    CandidateConfig("cfg02_gm2_c1_s30", -2.0, 1.0, 30),
+    CandidateConfig("cfg03_gm2_c2_s20", -2.0, 2.0, 20),
+    CandidateConfig("cfg04_gp2_c1_s40", 2.0, 1.0, 40),
+    CandidateConfig("cfg05_gp2_c2_s30", 2.0, 2.0, 30),
+    CandidateConfig("cfg06_gm2_c2_s40", -2.0, 2.0, 40),
+    CandidateConfig("cfg07_gp2_c1_s20", 2.0, 1.0, 20),
+)
+SEEDS_PER_CONFIG = 8
+BASELINE_CONFIG_ID = "cfg00_baseline"
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
+    parser.add_argument("--data-dir", type=Path)
+    parser.add_argument("--checkpoint-dir", type=Path)
+    parser.add_argument("--cellvit-root", type=Path)
+    parser.add_argument("--cellvit-model", type=Path)
+    parser.add_argument("--output-dir", type=Path)
+    parser.add_argument("--num-images", type=int, default=100)
+    parser.add_argument("--stems", nargs="*")
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--match-radius", type=float, default=50.0)
+    parser.add_argument("--green-lower-quantile", type=float, default=0.01)
+    parser.add_argument("--green-upper-quantile", type=float, default=0.99)
+    parser.add_argument(
+        "--generator-precision", choices=("auto", "fp16", "fp32"), default="auto"
+    )
+    parser.add_argument(
+        "--cellvit-precision", choices=("auto", "fp16", "fp32"), default="auto"
+    )
+    parser.add_argument("--kid-subset-size", type=int, default=100)
+    parser.add_argument("--kid-subsets", type=int, default=100)
+    parser.add_argument("--analysis-only", action="store_true")
+    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--overwrite", action="store_true")
+    parser.add_argument(
+        "--skip-metrics",
+        action="store_true",
+        help="Development-only option; normal experiment runs always calculate FID and KID",
+    )
+    args = parser.parse_args()
+    config_path = args.config.expanduser().resolve()
+    if config_path.is_file():
+        paths = RuntimePaths.read(config_path)
+        args.data_dir = args.data_dir or paths.data_dir
+        args.checkpoint_dir = args.checkpoint_dir or paths.checkpoint_dir
+        args.cellvit_root = args.cellvit_root or paths.cellvit_root
+        args.cellvit_model = args.cellvit_model or paths.cellvit_model
+        args.output_dir = args.output_dir or paths.output_root / "cellvit_rerank_fid_kid"
+    missing = [
+        name
+        for name in (
+            "data_dir",
+            "checkpoint_dir",
+            "cellvit_root",
+            "cellvit_model",
+            "output_dir",
+        )
+        if getattr(args, name) is None
+    ]
+    if missing:
+        raise ValueError(
+            f"Missing paths {missing}. Run experiments/colab/setup_colab.py or pass them explicitly."
+        )
+    # ExperimentRuntime expects these common workflow attributes. Candidate-specific
+    # steps and strength are passed explicitly for every generation.
+    args.steps = 20
+    args.spatial_strength = 1.0
+    args.guidance_hook = None
+    args.guidance_config = None
+    args.max_guidance_attempts = 1
+    args.keep_rejected = False
+    return args
+
+
+def _bounded_assignment(
+    source_indices: list[int],
+    predicted_indices: list[int],
+    source: list[CellObservation],
+    predicted: list[CellObservation],
+    radius: float,
+    same_type: bool,
+) -> list[tuple[int, int, float]]:
+    if not source_indices or not predicted_indices:
+        return []
+    source_xy = np.asarray([source[index].centroid for index in source_indices], dtype=float)
+    predicted_xy = np.asarray(
+        [predicted[index].centroid for index in predicted_indices], dtype=float
+    )
+    distances = np.linalg.norm(
+        source_xy[:, None, :] - predicted_xy[None, :, :], axis=2
+    )
+    type_agreement = np.asarray(
+        [
+            [source[i].cell_type == predicted[j].cell_type for j in predicted_indices]
+            for i in source_indices
+        ],
+        dtype=bool,
+    )
+    valid = distances <= radius
+    valid &= type_agreement if same_type else ~type_agreement
+
+    # Each target receives either one unique valid prediction or a dummy unmatched
+    # column. A valid edge always costs less than a dummy, so assignment first
+    # maximizes match count and then minimizes distance.
+    source_count, predicted_count = distances.shape
+    cost = np.full((source_count, predicted_count + source_count), 2.0)
+    cost[:, :predicted_count] = np.where(
+        valid, distances / max(radius, 1e-6), 1_000_000.0
+    )
+    rows, columns = linear_sum_assignment(cost)
+    matches = []
+    for row, column in zip(rows.tolist(), columns.tolist()):
+        if column < predicted_count and valid[row, column]:
+            matches.append(
+                (
+                    source_indices[row],
+                    predicted_indices[column],
+                    float(distances[row, column]),
+                )
+            )
+    return matches
+
+
+def score_spatial_cells(
+    source: list[CellObservation],
+    predicted: list[CellObservation],
+    radius: float = 50.0,
+) -> dict[str, float | int]:
+    """Apply the requested +1/0/-1 point score with unique cell matching.
+
+    Same-type prediction within radius: +1. Different-type prediction within
+    radius: 0. No prediction within radius: -1. Each prediction can match at most
+    one input cell. Extra predictions are reported but do not alter the score.
+    """
+
+    if radius <= 0:
+        raise ValueError("match radius must be positive")
+    remaining_source = list(range(len(source)))
+    remaining_predicted = list(range(len(predicted)))
+    same_matches = _bounded_assignment(
+        remaining_source,
+        remaining_predicted,
+        source,
+        predicted,
+        radius,
+        same_type=True,
+    )
+    used_source = {match[0] for match in same_matches}
+    used_predicted = {match[1] for match in same_matches}
+    remaining_source = [index for index in remaining_source if index not in used_source]
+    remaining_predicted = [
+        index for index in remaining_predicted if index not in used_predicted
+    ]
+    wrong_matches = _bounded_assignment(
+        remaining_source,
+        remaining_predicted,
+        source,
+        predicted,
+        radius,
+        same_type=False,
+    )
+    used_source.update(match[0] for match in wrong_matches)
+    used_predicted.update(match[1] for match in wrong_matches)
+
+    same_count = len(same_matches)
+    wrong_count = len(wrong_matches)
+    missing_count = len(source) - same_count - wrong_count
+    raw_score = same_count - missing_count
+    normalized_score = raw_score / len(source) if source else 0.0
+    same_distances = [match[2] for match in same_matches]
+    return {
+        "spatial_score": float(normalized_score),
+        "spatial_points": int(raw_score),
+        "target_cells": len(source),
+        "predicted_cells": len(predicted),
+        "same_type_matches": same_count,
+        "different_type_matches": wrong_count,
+        "missing_matches": missing_count,
+        "extra_predictions": len(predicted) - len(used_predicted),
+        "mean_same_type_distance": (
+            float(np.mean(same_distances)) if same_distances else float("nan")
+        ),
+    }
+
+
+def green_condition(
+    morphology: np.ndarray,
+    green_sd: float,
+    lower: float,
+    upper: float,
+) -> tuple[np.ndarray, dict[str, Any]]:
+    index = MORPH_FEATURES.index("g_mean")
+    changed = np.asarray(morphology, dtype=np.float32).copy()
+    requested = float(changed[index] + green_sd)
+    changed[index] = np.clip(requested, lower, upper)
+    return changed, {
+        "green_baseline": float(morphology[index]),
+        "green_requested": requested,
+        "green_applied": float(changed[index]),
+        "green_clipped": not math.isclose(requested, float(changed[index]), abs_tol=1e-7),
+    }
+
+
+def run_id(
+    stems: list[str],
+    seed: int,
+    radius: float,
+    green_lower_quantile: float,
+    green_upper_quantile: float,
+    checkpoint_dir: Path,
+) -> str:
+    payload = {
+        "stems": stems,
+        "seed": seed,
+        "radius": radius,
+        "green_quantiles": [green_lower_quantile, green_upper_quantile],
+        "checkpoint_dir": str(checkpoint_dir.expanduser().resolve()),
+        "configs": [asdict(config) for config in DEFAULT_CONFIGS],
+        "seeds_per_config": SEEDS_PER_CONFIG,
+    }
+    digest = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:12]
+    return f"cellvit_rerank_{digest}"
+
+
+def copy_image(source: Path, destination: Path, overwrite: bool = False) -> None:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if overwrite or not destination.is_file():
+        with Image.open(source) as image:
+            image.convert("RGB").save(destination)
+
+
+def calculate_fid_kid(
+    real_dir: Path,
+    generated_dir: Path,
+    subset_size: int,
+    subsets: int,
+    rng_seed: int,
+) -> dict[str, float | int]:
+    try:
+        import torch
+        import torch_fidelity
+    except ImportError as error:
+        raise RuntimeError(
+            "FID/KID requires torch-fidelity. Run `pip install -r "
+            "experiments/requirements_fidelity.txt`."
+        ) from error
+
+    real_count = len(list(real_dir.glob("*.png")))
+    generated_count = len(list(generated_dir.glob("*.png")))
+    if real_count != generated_count:
+        raise RuntimeError(
+            f"FID/KID set sizes differ: real={real_count}, generated={generated_count}"
+        )
+    if real_count < 2:
+        raise ValueError("FID/KID requires at least two real and generated images")
+    actual_subset_size = min(int(subset_size), real_count)
+    metrics = torch_fidelity.calculate_metrics(
+        input1=str(real_dir),
+        input2=str(generated_dir),
+        cuda=torch.cuda.is_available(),
+        isc=False,
+        fid=True,
+        kid=True,
+        kid_subset_size=actual_subset_size,
+        kid_subsets=int(subsets),
+        rng_seed=int(rng_seed),
+        verbose=False,
+    )
+    return {
+        "images": real_count,
+        "fid": max(0.0, float(metrics["frechet_inception_distance"])),
+        "kid_mean": float(metrics["kernel_inception_distance_mean"]),
+        "kid_std": float(metrics["kernel_inception_distance_std"]),
+        "kid_subset_size": actual_subset_size,
+        "kid_subsets": int(subsets),
+        "rng_seed": int(rng_seed),
+    }
+
+
+def context_for_candidate(
+    runtime: ExperimentRuntime,
+    stem: str,
+    config: CandidateConfig,
+    seed_index: int,
+    green_lower: float,
+    green_upper: float,
+) -> tuple[GenerationContext, dict[str, Any]]:
+    sample = runtime.catalog.sample(stem)
+    morphology, green_details = green_condition(
+        sample.morphology, config.green_sd, green_lower, green_upper
+    )
+    candidate_seed = deterministic_seed(
+        runtime.args.seed, stem, "cellvit_rerank", f"seed_{seed_index:02d}"
+    )
+    context = GenerationContext(
+        stem=stem,
+        condition_id=f"{config.config_id}__seed{seed_index:02d}",
+        spatial_map=runtime.catalog.load_spatial(sample.spatial_path),
+        morphology=morphology,
+        seed=candidate_seed,
+        metadata={
+            "experiment": "cellvit_spatial_rerank_fid_kid",
+            "candidate_config": asdict(config),
+            "seed_index": seed_index,
+            **green_details,
+        },
+    )
+    return context, green_details
+
+
+def artifact_name(stem: str, config: CandidateConfig, seed_index: int) -> str:
+    return f"{stem}__rerank__{config.config_id}__seed{seed_index:02d}"
+
+
+def main() -> None:
+    args = parse_args()
+    if args.num_images < 1:
+        raise ValueError("num-images must be positive")
+    if not 0 <= args.green_lower_quantile < args.green_upper_quantile <= 1:
+        raise ValueError("green quantiles must satisfy 0 <= lower < upper <= 1")
+    if args.kid_subsets < 1 or args.kid_subset_size < 2:
+        raise ValueError("KID subsets must be positive and subset size must be at least two")
+
+    catalog = DatasetCatalog(args.data_dir)
+    stems = catalog.select(args.num_images, args.seed, args.stems)
+    if not args.dry_run and not args.skip_metrics and len(stems) < 2:
+        raise ValueError("Use at least two inputs when calculating FID/KID")
+    if not args.dry_run and not args.skip_metrics and len(stems) < 1000:
+        print(
+            f"WARNING: FID from {len(stems)} images is preliminary and statistically unstable; "
+            "use a much larger held-out set for paper results.",
+            flush=True,
+        )
+    output_root = args.output_dir.expanduser().resolve()
+    experiment_dir = output_root / run_id(
+        stems,
+        args.seed,
+        args.match_radius,
+        args.green_lower_quantile,
+        args.green_upper_quantile,
+        args.checkpoint_dir,
+    )
+    args.output_dir = experiment_dir
+    experiment_dir.mkdir(parents=True, exist_ok=True)
+    green_series = catalog.morphology["g_mean"].dropna()
+    green_lower = float(green_series.quantile(args.green_lower_quantile))
+    green_upper = float(green_series.quantile(args.green_upper_quantile))
+    manifest = {
+        "experiment": "cellvit_spatial_rerank_fid_kid",
+        "runtime_config": str(args.config.expanduser().resolve()),
+        "run_directory": str(experiment_dir),
+        "stems": stems,
+        "num_inputs": len(stems),
+        "configs": [asdict(config) for config in DEFAULT_CONFIGS],
+        "seeds_per_config": SEEDS_PER_CONFIG,
+        "candidates_per_input": len(DEFAULT_CONFIGS) * SEEDS_PER_CONFIG,
+        "total_candidate_images": len(stems) * len(DEFAULT_CONFIGS) * SEEDS_PER_CONFIG,
+        "baseline": {"config_id": BASELINE_CONFIG_ID, "seed_index": 0},
+        "green_allowed_standardized_range": [green_lower, green_upper],
+        "score": {
+            "input_cells": "exact source GeoJSON centroids used to create the conditioning map",
+            "generated_cells": "CellViT++ centroids and types from each generated image",
+            "radius_pixels": args.match_radius,
+            "same_type_within_radius": 1,
+            "different_type_within_radius": 0,
+            "no_cell_within_radius": -1,
+            "unique_prediction_per_target": True,
+            "extra_prediction_penalty": 0,
+            "tie_break": "first candidate in fixed config/seed order",
+        },
+        "fid_kid_warning": "FID is unstable for small num-images; use a large held-out set for paper results.",
+    }
+    write_json(experiment_dir / "experiment_manifest.json", manifest)
+    if args.dry_run:
+        for stem in stems:
+            sample = catalog.sample(stem)
+            baseline = sample.morphology
+            if not load_cells(sample.geojson_path):
+                raise RuntimeError(f"Source GeoJSON has no recognized cells: {stem}")
+            for config in DEFAULT_CONFIGS:
+                changed, _ = green_condition(
+                    baseline, config.green_sd, green_lower, green_upper
+                )
+                changed_indices = np.flatnonzero(
+                    ~np.isclose(changed, baseline, atol=1e-7, rtol=0)
+                )
+                if config.green_sd == 0 and len(changed_indices):
+                    raise AssertionError("Green-neutral configuration changed morphology")
+                if config.green_sd != 0 and changed_indices.tolist() not in (
+                    [],
+                    [MORPH_FEATURES.index("g_mean")],
+                ):
+                    raise AssertionError("Green intervention changed a non-green feature")
+        print(
+            f"Dry run passed: {len(stems)} inputs x 8 configs x 8 seeds = "
+            f"{len(stems) * 64} candidates"
+        )
+        return
+
+    real_dir = experiment_dir / "metric_sets" / "real"
+    baseline_dir = experiment_dir / "metric_sets" / "baseline"
+    selected_dir = experiment_dir / "metric_sets" / "selected"
+    baseline_config = next(
+        config for config in DEFAULT_CONFIGS if config.config_id == BASELINE_CONFIG_ID
+    )
+
+    # Phase 1: generate exactly one fixed baseline candidate per condition, then
+    # calculate baseline FID/KID before any CellViT++ selection.
+    phase_one = ExperimentRuntime(args)
+    baseline_rows = []
+    try:
+        for index, stem in enumerate(stems, start=1):
+            sample = phase_one.catalog.sample(stem)
+            context, green_details = context_for_candidate(
+                phase_one, stem, baseline_config, 0, green_lower, green_upper
+            )
+            name = artifact_name(stem, baseline_config, 0)
+            image_path, generation_metadata = phase_one.ensure_generated(
+                context,
+                name,
+                steps=baseline_config.denoising_steps,
+                spatial_strength=baseline_config.controlnet_strength,
+            )
+            copy_image(sample.image_path, real_dir / f"{stem}.png", args.overwrite)
+            copy_image(image_path, baseline_dir / f"{stem}.png", args.overwrite)
+            baseline_rows.append(
+                {
+                    "stem": stem,
+                    "generated_image": str(image_path),
+                    "real_image": str(sample.image_path),
+                    "seed": context.seed,
+                    **asdict(baseline_config),
+                    **green_details,
+                    "generation_seconds": generation_metadata.get("seconds", np.nan),
+                }
+            )
+            print(f"[baseline {index}/{len(stems)}] {stem}", flush=True)
+    finally:
+        phase_one.close()
+    pd.DataFrame(baseline_rows).to_csv(
+        experiment_dir / "baseline_images.csv", index=False
+    )
+    baseline_metrics = None
+    if not args.skip_metrics:
+        baseline_metrics = calculate_fid_kid(
+            real_dir,
+            baseline_dir,
+            args.kid_subset_size,
+            args.kid_subsets,
+            args.seed,
+        )
+        write_json(experiment_dir / "metrics_before_reranking.json", baseline_metrics)
+        print(f"[metrics before] {baseline_metrics}", flush=True)
+
+    # Phase 2: generate/reuse all 64 candidates, run CellViT++, apply only the
+    # requested spatial/type point score, and copy the highest-scoring candidate.
+    phase_two = ExperimentRuntime(args)
+    all_rows: list[dict[str, Any]] = []
+    selections = []
+    try:
+        for input_index, stem in enumerate(stems, start=1):
+            source_cells = load_cells(phase_two.catalog.sample(stem).geojson_path)
+            candidate_rows = []
+            candidate_order = 0
+            for config in DEFAULT_CONFIGS:
+                for seed_index in range(SEEDS_PER_CONFIG):
+                    context, green_details = context_for_candidate(
+                        phase_two,
+                        stem,
+                        config,
+                        seed_index,
+                        green_lower,
+                        green_upper,
+                    )
+                    name = artifact_name(stem, config, seed_index)
+                    image_path, generation_metadata = phase_two.ensure_generated(
+                        context,
+                        name,
+                        steps=config.denoising_steps,
+                        spatial_strength=config.controlnet_strength,
+                    )
+                    geojson_path = phase_two.ensure_cellvit(image_path, name)
+                    predicted_cells = load_cells(geojson_path)
+                    score = score_spatial_cells(
+                        source_cells, predicted_cells, args.match_radius
+                    )
+                    row = {
+                        "stem": stem,
+                        "candidate_order": candidate_order,
+                        "seed_index": seed_index,
+                        "seed": context.seed,
+                        **asdict(config),
+                        **green_details,
+                        **score,
+                        "generated_image": str(image_path),
+                        "cellvit_geojson": str(geojson_path),
+                        "generation_seconds": generation_metadata.get(
+                            "seconds", np.nan
+                        ),
+                    }
+                    candidate_order += 1
+                    candidate_rows.append(row)
+                    all_rows.append(row)
+            best = max(candidate_rows, key=lambda row: float(row["spatial_score"]))
+            selected_path = selected_dir / f"{stem}.png"
+            copy_image(Path(best["generated_image"]), selected_path, True)
+            selections.append(
+                {
+                    "stem": stem,
+                    "selected_image": str(selected_path),
+                    **best,
+                }
+            )
+            pd.DataFrame(all_rows).to_csv(
+                experiment_dir / "candidate_scores.csv", index=False
+            )
+            pd.DataFrame(selections).to_csv(
+                experiment_dir / "selected_candidates.csv", index=False
+            )
+            print(
+                f"[rerank {input_index}/{len(stems)}] {stem}: "
+                f"score={best['spatial_score']:.4f} {best['config_id']} "
+                f"seed={best['seed_index']}",
+                flush=True,
+            )
+    finally:
+        phase_two.close()
+
+    selected_metrics = None
+    if not args.skip_metrics:
+        selected_metrics = calculate_fid_kid(
+            real_dir,
+            selected_dir,
+            args.kid_subset_size,
+            args.kid_subsets,
+            args.seed,
+        )
+        write_json(experiment_dir / "metrics_after_reranking.json", selected_metrics)
+        print(f"[metrics after] {selected_metrics}", flush=True)
+
+    comparison = {
+        "before": baseline_metrics,
+        "after": selected_metrics,
+        "improvement_lower_is_better": (
+            {
+                "fid": baseline_metrics["fid"] - selected_metrics["fid"],
+                "kid_mean": baseline_metrics["kid_mean"]
+                - selected_metrics["kid_mean"],
+            }
+            if baseline_metrics is not None and selected_metrics is not None
+            else None
+        ),
+    }
+    write_json(experiment_dir / "fid_kid_comparison.json", comparison)
+    print(f"Results written to {experiment_dir}")
+
+
+if __name__ == "__main__":
+    main()

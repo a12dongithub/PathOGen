@@ -93,6 +93,44 @@ Run individual experiments when needed:
 
 The spatial experiments deliberately share one output directory, so coordinate analysis reuses generated PNGs and CellViT++ GeoJSONs from count fidelity. All scripts resume existing artifacts unless `--overwrite` is supplied.
 
+## CellViT++ best-of-64 FID/KID experiment
+
+One entrypoint runs the complete comparison: it generates one fixed baseline image per input and calculates baseline FID/KID, generates and segments 64 candidates per input, selects the highest CellViT++ point score, and calculates FID/KID again on the selected set.
+
+```python
+!python experiments/05_cellvit_rerank_fid_kid.py \
+  --dry-run \
+  --num-images 3
+
+!python experiments/05_cellvit_rerank_fid_kid.py \
+  --num-images 100 \
+  --match-radius 50 \
+  --seed 42
+```
+
+The script reads `assets/runtime_paths.json`, so no asset paths are needed after setup. For each input cell, unique CellViT++ detections are assigned with the following only ranking score:
+
+- same type within 50 pixels: `+1`;
+- different type within 50 pixels: `0`;
+- no detected cell within 50 pixels: `-1`.
+
+There is no additional count, morphology or spatial-correlation score. Extra detections are reported but receive no penalty. Tied candidates retain the first fixed configuration/seed order.
+
+The three requested parameter lists form 18 full-factorial combinations. To retain exactly `8 configurations × 8 seeds = 64` candidates, the fixed design is:
+
+| Configuration | Green offset (SD) | ControlNet strength | Denoising steps |
+|---|---:|---:|---:|
+| `cfg00_baseline` | 0 | 1 | 20 |
+| `cfg01_g0_c2_s40` | 0 | 2 | 40 |
+| `cfg02_gm2_c1_s30` | -2 | 1 | 30 |
+| `cfg03_gm2_c2_s20` | -2 | 2 | 20 |
+| `cfg04_gp2_c1_s40` | +2 | 1 | 40 |
+| `cfg05_gp2_c2_s30` | +2 | 2 | 30 |
+| `cfg06_gm2_c2_s40` | -2 | 2 | 40 |
+| `cfg07_gp2_c1_s20` | +2 | 1 | 20 |
+
+The same eight deterministic noise seeds are reused across all configurations for each input. Green changes operate on standardized `g_mean` and are clamped to its empirical 1st–99th percentile range. The baseline FID/KID set always uses `cfg00_baseline` and seed index zero. Use substantially more than 100 inputs for final paper FID; small runs are useful only for pipeline validation and preliminary KID estimates.
+
 ## Custom asset locations
 
 The setup script accepts `--asset-root`, `--data-root`, `--checkpoint-root`, `--cellvit-root`, `--cellvit-model`, and `--output-root`. If `--asset-root` is changed, pass the generated configuration to later commands:
