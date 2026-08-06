@@ -186,11 +186,46 @@ def git_head(path: Path) -> str | None:
 
 def resolve_cellvit_model(args: argparse.Namespace, asset_root: Path) -> Path | None:
     if args.cellvit_model is not None:
-        return find_cellvit_model(args.cellvit_model, args.cellvit_model_name)
+        supplied = args.cellvit_model.expanduser().resolve()
+        if supplied.is_file() and zipfile.is_zipfile(supplied):
+            extracted = asset_root / "checkpoints" / "cellvit"
+            safe_extract_zip(supplied, extracted)
+            return find_cellvit_model(extracted, args.cellvit_model_name)
+        return find_cellvit_model(supplied, args.cellvit_model_name)
+
     model_root = asset_root / "checkpoints" / "cellvit"
+    try:
+        existing = find_cellvit_model(model_root, args.cellvit_model_name)
+        if not zipfile.is_zipfile(existing):
+            print(f"[cellvit] Reusing checkpoint: {existing}")
+            return existing
+    except FileNotFoundError:
+        existing = None
+
     if args.cellvit_model_url:
-        destination = model_root / args.cellvit_model_name
-        download_drive_file(args.cellvit_model_url, destination)
+        # The shared file may be either a raw .pth or a ZIP containing the
+        # checkpoint. Use a neutral download name and inspect its content.
+        destination = model_root / "cellvit_checkpoint.download"
+        downloaded = download_drive_file(args.cellvit_model_url, destination)
+        if zipfile.is_zipfile(downloaded):
+            safe_extract_zip(downloaded, model_root)
+            if not args.keep_archives:
+                downloaded.unlink(missing_ok=True)
+                print(f"[assets] Deleted extracted archive: {downloaded}")
+        else:
+            checkpoint = model_root / args.cellvit_model_name
+            checkpoint.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(downloaded), str(checkpoint))
+
+    # Recover cleanly if an older setup saved a ZIP under the preferred .pth
+    # filename before ZIP support was added.
+    preferred = model_root / args.cellvit_model_name
+    if preferred.is_file() and zipfile.is_zipfile(preferred):
+        safe_extract_zip(preferred, model_root)
+        if not args.keep_archives:
+            preferred.unlink(missing_ok=True)
+            print(f"[assets] Deleted extracted archive: {preferred}")
+
     try:
         return find_cellvit_model(model_root, args.cellvit_model_name)
     except FileNotFoundError:

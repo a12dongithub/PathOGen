@@ -7,6 +7,7 @@ import sys
 import tempfile
 import unittest
 import zipfile
+from argparse import Namespace
 from pathlib import Path
 
 import numpy as np
@@ -19,7 +20,7 @@ from experiments.colab.layout import (
     find_checkpoint,
     find_dataset,
 )
-from experiments.colab.setup_colab import safe_extract_zip
+from experiments.colab.setup_colab import resolve_cellvit_model, safe_extract_zip
 from experiments.fidelity.constants import MORPH_FEATURES
 from experiments.fidelity.data import CellObservation
 
@@ -106,6 +107,22 @@ class ColabWorkflowTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 safe_extract_zip(archive, root / "extract")
             self.assertFalse((root / "escape.txt").exists())
+
+    def test_cellvit_model_accepts_zip_path(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            archive = root / "cellvit-model.zip"
+            with zipfile.ZipFile(archive, "w") as handle:
+                handle.writestr(
+                    "nested/CellViT-256-x40-AMP.pth", b"checkpoint"
+                )
+            args = Namespace(
+                cellvit_model=archive,
+                cellvit_model_name="CellViT-256-x40-AMP.pth",
+            )
+            resolved = resolve_cellvit_model(args, root / "assets")
+            self.assertEqual(resolved.name, "CellViT-256-x40-AMP.pth")
+            self.assertTrue(resolved.is_file())
 
     def test_rerank_has_eight_configs_covering_requested_levels(self):
         configs = self.rerank.DEFAULT_CONFIGS

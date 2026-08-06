@@ -24,7 +24,7 @@ The data and FID58 checkpoint Drive links are already configured. CellViT++ sour
 ```
 
 ```python
-# A shareable Google Drive checkpoint URL
+# A shareable Google Drive URL for either a raw .pth or a ZIP containing it
 !python experiments/colab/setup_colab.py \
   --cellvit-model-url "PASTE_DRIVE_URL" \
   --output-root /content/drive/MyDrive/PathOGenResults
@@ -35,7 +35,7 @@ You can also upload the file directly to `assets/checkpoints/cellvit/` and run s
 Setup performs the following steps:
 
 1. installs the pinned fidelity dependencies without replacing Colab's CUDA PyTorch;
-2. downloads and safely extracts the dataset and FID58 checkpoint ZIPs;
+2. downloads and safely extracts the dataset, FID58 and optional CellViT++ checkpoint ZIPs;
 3. skips downloads whenever valid extracted assets already exist;
 4. sparse-clones the required `cellvit/` source package into `assets/external/CellViT-plus-plus/repository/`;
 5. discovers nested ZIP layouts and writes `assets/runtime_paths.json`;
