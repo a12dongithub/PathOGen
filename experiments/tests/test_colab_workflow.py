@@ -136,6 +136,12 @@ class ColabWorkflowTests(unittest.TestCase):
             {config.denoising_steps for config in configs}, {20, 30, 40}
         )
 
+    def test_rerank_batches_preserve_order_and_remainder(self):
+        self.assertEqual(
+            self.rerank.batches(list(range(10)), 4),
+            [[0, 1, 2, 3], [4, 5, 6, 7], [8, 9]],
+        )
+
     def test_spatial_point_score_is_plus_one_zero_minus_one(self):
         source = [
             observation("Neoplastic", 10, 10),

@@ -76,6 +76,24 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--cellvit-precision", choices=("auto", "fp16", "fp32"), default="auto"
     )
+    parser.add_argument(
+        "--generation-batch-size",
+        type=int,
+        default=4,
+        help="PathOGen batch size; automatically halved if CUDA runs out of memory",
+    )
+    parser.add_argument(
+        "--cellvit-batch-size",
+        type=int,
+        default=8,
+        help="CellViT++ batch size; automatically halved if CUDA runs out of memory",
+    )
+    parser.add_argument(
+        "--save-every",
+        type=int,
+        default=10,
+        help="Rewrite resumable score CSVs after this many completed inputs",
+    )
     parser.add_argument("--kid-subset-size", type=int, default=100)
     parser.add_argument("--kid-subsets", type=int, default=100)
     parser.add_argument("--analysis-only", action="store_true")
@@ -361,6 +379,13 @@ def artifact_name(stem: str, config: CandidateConfig, seed_index: int) -> str:
     return f"{stem}__rerank__{config.config_id}__seed{seed_index:02d}"
 
 
+def batches(values: list[Any], batch_size: int) -> list[list[Any]]:
+    return [
+        values[start : start + batch_size]
+        for start in range(0, len(values), batch_size)
+    ]
+
+
 def main() -> None:
     args = parse_args()
     if args.num_images < 1:
@@ -369,6 +394,10 @@ def main() -> None:
         raise ValueError("green quantiles must satisfy 0 <= lower < upper <= 1")
     if args.kid_subsets < 1 or args.kid_subset_size < 2:
         raise ValueError("KID subsets must be positive and subset size must be at least two")
+    if args.generation_batch_size < 1 or args.cellvit_batch_size < 1:
+        raise ValueError("generation and CellViT batch sizes must be positive")
+    if args.save_every < 1:
+        raise ValueError("save-every must be positive")
 
     catalog = DatasetCatalog(args.data_dir)
     stems = catalog.select(args.num_images, args.seed, args.stems)
@@ -404,6 +433,8 @@ def main() -> None:
         "seeds_per_config": SEEDS_PER_CONFIG,
         "candidates_per_input": len(DEFAULT_CONFIGS) * SEEDS_PER_CONFIG,
         "total_candidate_images": len(stems) * len(DEFAULT_CONFIGS) * SEEDS_PER_CONFIG,
+        "generation_batch_size": args.generation_batch_size,
+        "cellvit_batch_size": args.cellvit_batch_size,
         "baseline": {"config_id": BASELINE_CONFIG_ID, "seed_index": 0},
         "green_allowed_standardized_range": [green_lower, green_upper],
         "score": {
@@ -426,7 +457,7 @@ def main() -> None:
             baseline = sample.morphology
             if not load_cells(sample.geojson_path):
                 raise RuntimeError(f"Source GeoJSON has no recognized cells: {stem}")
-            for config in DEFAULT_CONFIGS:
+            for config_index, config in enumerate(DEFAULT_CONFIGS, start=1):
                 changed, _ = green_condition(
                     baseline, config.green_sd, green_lower, green_upper
                 )
@@ -458,32 +489,48 @@ def main() -> None:
     phase_one = ExperimentRuntime(args)
     baseline_rows = []
     try:
-        for index, stem in enumerate(stems, start=1):
-            sample = phase_one.catalog.sample(stem)
-            context, green_details = context_for_candidate(
-                phase_one, stem, baseline_config, 0, green_lower, green_upper
-            )
-            name = artifact_name(stem, baseline_config, 0)
-            image_path, generation_metadata = phase_one.ensure_generated(
-                context,
-                name,
+        completed = 0
+        for stem_batch in batches(stems, args.generation_batch_size):
+            entries = []
+            for stem in stem_batch:
+                sample = phase_one.catalog.sample(stem)
+                context, green_details = context_for_candidate(
+                    phase_one, stem, baseline_config, 0, green_lower, green_upper
+                )
+                entries.append(
+                    (
+                        stem,
+                        sample,
+                        context,
+                        green_details,
+                        artifact_name(stem, baseline_config, 0),
+                    )
+                )
+            generated = phase_one.ensure_generated_batch(
+                [entry[2] for entry in entries],
+                [entry[4] for entry in entries],
                 steps=baseline_config.denoising_steps,
                 spatial_strength=baseline_config.controlnet_strength,
             )
-            copy_image(sample.image_path, real_dir / f"{stem}.png", args.overwrite)
-            copy_image(image_path, baseline_dir / f"{stem}.png", args.overwrite)
-            baseline_rows.append(
-                {
-                    "stem": stem,
-                    "generated_image": str(image_path),
-                    "real_image": str(sample.image_path),
-                    "seed": context.seed,
-                    **asdict(baseline_config),
-                    **green_details,
-                    "generation_seconds": generation_metadata.get("seconds", np.nan),
-                }
-            )
-            print(f"[baseline {index}/{len(stems)}] {stem}", flush=True)
+            for entry, (image_path, generation_metadata) in zip(entries, generated):
+                stem, sample, context, green_details, _ = entry
+                copy_image(sample.image_path, real_dir / f"{stem}.png", args.overwrite)
+                copy_image(image_path, baseline_dir / f"{stem}.png", args.overwrite)
+                baseline_rows.append(
+                    {
+                        "stem": stem,
+                        "generated_image": str(image_path),
+                        "real_image": str(sample.image_path),
+                        "seed": context.seed,
+                        **asdict(baseline_config),
+                        **green_details,
+                        "generation_seconds": generation_metadata.get(
+                            "seconds", np.nan
+                        ),
+                    }
+                )
+                completed += 1
+                print(f"[baseline {completed}/{len(stems)}] {stem}", flush=True)
     finally:
         phase_one.close()
     pd.DataFrame(baseline_rows).to_csv(
@@ -512,6 +559,7 @@ def main() -> None:
             candidate_rows = []
             candidate_order = 0
             for config in DEFAULT_CONFIGS:
+                entries = []
                 for seed_index in range(SEEDS_PER_CONFIG):
                     context, green_details = context_for_candidate(
                         phase_two,
@@ -522,13 +570,34 @@ def main() -> None:
                         green_upper,
                     )
                     name = artifact_name(stem, config, seed_index)
-                    image_path, generation_metadata = phase_two.ensure_generated(
-                        context,
-                        name,
-                        steps=config.denoising_steps,
-                        spatial_strength=config.controlnet_strength,
+                    entries.append((seed_index, context, green_details, name))
+
+                generated = []
+                for entry_batch in batches(entries, args.generation_batch_size):
+                    generated.extend(
+                        phase_two.ensure_generated_batch(
+                            [entry[1] for entry in entry_batch],
+                            [entry[3] for entry in entry_batch],
+                            steps=config.denoising_steps,
+                            spatial_strength=config.controlnet_strength,
+                        )
                     )
-                    geojson_path = phase_two.ensure_cellvit(image_path, name)
+                image_paths = [result[0] for result in generated]
+                geojson_paths = []
+                indexed = list(range(len(entries)))
+                for index_batch in batches(indexed, args.cellvit_batch_size):
+                    geojson_paths.extend(
+                        phase_two.ensure_cellvit_batch(
+                            [image_paths[index] for index in index_batch],
+                            [entries[index][3] for index in index_batch],
+                        )
+                    )
+
+                for entry, generated_result, geojson_path in zip(
+                    entries, generated, geojson_paths
+                ):
+                    seed_index, context, green_details, _ = entry
+                    image_path, generation_metadata = generated_result
                     predicted_cells = load_cells(geojson_path)
                     score = score_spatial_cells(
                         source_cells, predicted_cells, args.match_radius
@@ -550,6 +619,12 @@ def main() -> None:
                     candidate_order += 1
                     candidate_rows.append(row)
                     all_rows.append(row)
+                print(
+                    f"[rerank {input_index}/{len(stems)} config "
+                    f"{config_index}/{len(DEFAULT_CONFIGS)}] {config.config_id}: "
+                    f"generated and segmented {len(entries)} candidates",
+                    flush=True,
+                )
             best = max(candidate_rows, key=lambda row: float(row["spatial_score"]))
             selected_path = selected_dir / f"{stem}.png"
             copy_image(Path(best["generated_image"]), selected_path, True)
@@ -560,12 +635,13 @@ def main() -> None:
                     **best,
                 }
             )
-            pd.DataFrame(all_rows).to_csv(
-                experiment_dir / "candidate_scores.csv", index=False
-            )
-            pd.DataFrame(selections).to_csv(
-                experiment_dir / "selected_candidates.csv", index=False
-            )
+            if input_index % args.save_every == 0 or input_index == len(stems):
+                pd.DataFrame(all_rows).to_csv(
+                    experiment_dir / "candidate_scores.csv", index=False
+                )
+                pd.DataFrame(selections).to_csv(
+                    experiment_dir / "selected_candidates.csv", index=False
+                )
             print(
                 f"[rerank {input_index}/{len(stems)}] {stem}: "
                 f"score={best['spatial_score']:.4f} {best['config_id']} "

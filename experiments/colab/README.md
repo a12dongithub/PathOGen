@@ -105,8 +105,17 @@ One entrypoint runs the complete comparison: it generates one fixed baseline ima
 !python experiments/05_cellvit_rerank_fid_kid.py \
   --num-images 100 \
   --match-radius 50 \
+  --generation-batch-size 4 \
+  --cellvit-batch-size 8 \
   --seed 42
 ```
+
+The L4-oriented defaults are a PathOGen batch of 4 and CellViT++ batch of 8.
+Both backends automatically halve their current batch after a CUDA out-of-memory
+error, so trying `--generation-batch-size 8` is safe. Each sample retains its own
+deterministic `torch.Generator`, and batching therefore does not reuse noise across
+candidates. Score CSVs are checkpointed every 10 completed inputs by default; use
+`--save-every` to change that interval.
 
 The script reads `assets/runtime_paths.json`, so no asset paths are needed after setup. For each input cell, unique CellViT++ detections are assigned with the following only ranking score:
 

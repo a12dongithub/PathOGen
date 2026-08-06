@@ -149,7 +149,10 @@ class PathOGenGenerator:
             )
         del state
         film_mlps.load_state_dict(_load_torch_state(self.checkpoint_dir / "film_mlps.pt"))
-        unet.set_attention_slice("max")
+        # "max" slices attention one head at a time and severely under-utilizes
+        # modern 20+ GiB GPUs. "auto" remains memory conscious while allowing
+        # useful batched throughput on L4/A100/H100-class devices.
+        unet.set_attention_slice("auto" if self.gpu_memory_gib >= 16 else "max")
         self.unet = unet.to(
             device="cpu" if self.low_vram else self.device, dtype=self.dtype
         ).eval()
@@ -291,6 +294,218 @@ class PathOGenGenerator:
         decoded = (decoded / 2 + 0.5).clamp(0, 1)
         array = decoded[0].permute(1, 2, 0).detach().cpu().numpy()
         return Image.fromarray((array * 255.0).round().astype(np.uint8))
+
+    def _generate_batch_once(
+        self,
+        contexts: list[GenerationContext],
+        steps: int,
+        spatial_strength: float,
+        hook: GuidanceHook,
+    ) -> list[Image.Image]:
+        """Generate a true GPU batch while retaining one RNG stream per context."""
+        if not contexts:
+            return []
+        if len(contexts) == 1:
+            return [self._generate_once(contexts[0], steps, spatial_strength, hook)]
+        self.load()
+        assert self.unet is not None
+        assert self.vae is not None
+        assert self.spatial_encoder is not None
+        assert self.noise_scheduler is not None
+        assert self.text_embeddings is not None
+        for context in contexts:
+            if context.spatial_map.shape != (512, 512, 5):
+                raise ValueError(
+                    f"Expected spatial map 512x512x5, got {context.spatial_map.shape}"
+                )
+            if context.morphology.shape != (16,):
+                raise ValueError(
+                    f"Expected morphology vector length 16, got {context.morphology.shape}"
+                )
+
+        use_autocast = self.dtype == torch.float16
+        autocast = (
+            lambda: torch.autocast(device_type="cuda", dtype=torch.float16)
+        ) if use_autocast else contextlib.nullcontext
+        spatial = np.stack(
+            [context.spatial_map.astype(np.float32) / 255.0 for context in contexts]
+        )
+        spatial_tensor = torch.from_numpy(spatial).permute(0, 3, 1, 2).to(self.dtype)
+        morphology = torch.from_numpy(
+            np.stack([context.morphology.astype(np.float32) for context in contexts])
+        ).to(self.device, dtype=self.dtype)
+        spatial_scales = torch.as_tensor(
+            [
+                float(context.metadata.get("guidance_spatial_scale", spatial_strength))
+                for context in contexts
+            ],
+            device=self.device,
+            dtype=self.dtype,
+        ).view(-1, 1, 1, 1)
+
+        self._component_to_gpu(self.spatial_encoder)
+        with torch.inference_mode(), autocast():
+            spatial_features = self.spatial_encoder(spatial_tensor.to(self.device))
+            spatial_features = spatial_features * spatial_scales
+        self._component_to_cpu(self.spatial_encoder)
+
+        scheduler = DDIMScheduler(
+            beta_start=self.noise_scheduler.config.beta_start,
+            beta_end=self.noise_scheduler.config.beta_end,
+            beta_schedule=self.noise_scheduler.config.beta_schedule,
+            num_train_timesteps=self.noise_scheduler.config.num_train_timesteps,
+            prediction_type=self.noise_scheduler.config.prediction_type,
+            clip_sample=False,
+            set_alpha_to_one=False,
+            steps_offset=1,
+            timestep_spacing="leading",
+        )
+        scheduler.set_timesteps(int(steps), device=self.device)
+        # Separate generators ensure every sample keeps its deterministic seed;
+        # changing batch size does not alter the assigned random-noise stream.
+        latents = torch.cat(
+            [
+                torch.randn(
+                    (1, 4, 64, 64),
+                    generator=torch.Generator(device=self.device).manual_seed(
+                        int(context.seed)
+                    ),
+                    device=self.device,
+                    dtype=self.dtype,
+                )
+                for context in contexts
+            ],
+            dim=0,
+        ) * scheduler.init_noise_sigma
+
+        self._component_to_gpu(self.unet)
+        embeddings = self.text_embeddings.to(self.device, dtype=self.dtype).expand(
+            len(contexts), -1, -1
+        )
+        for module in self.unet.modules():
+            if hasattr(module, "film_mlp"):
+                module.current_morph16 = morphology
+        try:
+            for step_index, timestep in enumerate(scheduler.timesteps):
+                latent_input = scheduler.scale_model_input(latents, timestep)
+                model_input = torch.cat([latent_input, spatial_features], dim=1)
+                with torch.inference_mode(), autocast():
+                    noise = self.unet(
+                        model_input,
+                        timestep,
+                        encoder_hidden_states=embeddings,
+                        return_dict=False,
+                    )[0]
+                    latents = scheduler.step(
+                        noise, timestep, latents, return_dict=False
+                    )[0]
+                if isinstance(hook, NoOpGuidance):
+                    pass
+                else:
+                    latents = torch.cat(
+                        [
+                            hook.on_denoising_step(
+                                context,
+                                step_index,
+                                timestep,
+                                latents[index : index + 1],
+                            )
+                            for index, context in enumerate(contexts)
+                        ],
+                        dim=0,
+                    )
+                if not torch.isfinite(latents).all():
+                    raise RuntimeError(
+                        f"Non-finite batched latents at step {step_index + 1}/{steps}"
+                    )
+        finally:
+            for module in self.unet.modules():
+                if hasattr(module, "film_mlp"):
+                    module.current_morph16 = None
+        self._component_to_cpu(self.unet)
+
+        self._component_to_gpu(self.vae)
+        scaled = latents.to(dtype=torch.float32) / self.vae.config.scaling_factor
+        with torch.inference_mode(), torch.autocast(device_type="cuda", enabled=False):
+            decoded = self.vae.decode(scaled, return_dict=False)[0]
+        self._component_to_cpu(self.vae)
+        decoded = (decoded / 2 + 0.5).clamp(0, 1)
+        arrays = decoded.permute(0, 2, 3, 1).detach().cpu().numpy()
+        return [
+            Image.fromarray((array * 255.0).round().astype(np.uint8))
+            for array in arrays
+        ]
+
+    @staticmethod
+    def _is_cuda_oom(error: RuntimeError) -> bool:
+        return isinstance(error, torch.OutOfMemoryError) or "out of memory" in str(
+            error
+        ).lower()
+
+    def generate_batch(
+        self,
+        contexts: list[GenerationContext],
+        steps: int = 20,
+        spatial_strength: float = 1.0,
+        hook: GuidanceHook | None = None,
+        max_attempts: int = 1,
+    ) -> list[GenerationResult]:
+        """Generate contexts together, recursively reducing a batch after OOM."""
+        if not contexts:
+            return []
+        if steps < 1 or max_attempts < 1:
+            raise ValueError("steps and max_attempts must be positive")
+        hook = hook or NoOpGuidance()
+        # Retry feedback may change each sample independently. Keep that uncommon
+        # guidance path serial until a batched feedback API is explicitly defined.
+        if max_attempts != 1:
+            return [
+                self.generate(
+                    context,
+                    steps=steps,
+                    spatial_strength=spatial_strength,
+                    hook=hook,
+                    max_attempts=max_attempts,
+                )
+                for context in contexts
+            ]
+        started = time.perf_counter()
+        active = [hook.adjust_conditions(context.clone(attempt=0)) for context in contexts]
+        split_at = None
+        try:
+            images = self._generate_batch_once(active, steps, spatial_strength, hook)
+        except RuntimeError as error:
+            if not self._is_cuda_oom(error) or len(active) == 1:
+                raise
+            split_at = len(active) // 2
+        if split_at is not None:
+            # Retry only after leaving the exception block so its traceback no
+            # longer retains the failed batch's CUDA tensors.
+            gc.collect()
+            torch.cuda.empty_cache()
+            print(
+                f"[generator] CUDA OOM at batch {len(active)}; retrying "
+                f"as {split_at}+{len(active) - split_at}",
+                flush=True,
+            )
+            return self.generate_batch(
+                contexts[:split_at], steps, spatial_strength, hook, max_attempts
+            ) + self.generate_batch(
+                contexts[split_at:], steps, spatial_strength, hook, max_attempts
+            )
+        seconds_per_image = (time.perf_counter() - started) / len(active)
+        results = []
+        for image, context in zip(images, active):
+            decision = hook.evaluate_candidate(image, context)
+            results.append(
+                GenerationResult(
+                    image=image,
+                    context=context,
+                    decision=decision,
+                    seconds=seconds_per_image,
+                )
+            )
+        return results
 
     def generate(
         self,

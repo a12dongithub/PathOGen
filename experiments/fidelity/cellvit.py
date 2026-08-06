@@ -127,17 +127,44 @@ class CellViTRunner:
         predictions["hv_map"] = predictions["hv_map"].permute(0, 2, 3, 1).float()
         return predictions
 
-    def infer(self, image: Image.Image) -> dict:
+    def infer_batch(self, images: list[Image.Image]) -> list[dict]:
+        """Run true batched segmentation, reducing the batch automatically on OOM."""
+        if not images:
+            return []
         self._load()
         assert self.model is not None and self.postprocessor is not None
-        tensor = self._tensor(image)
+        tensor = torch.cat([self._tensor(image) for image in images], dim=0)
         use_amp = self.device.type == "cuda" and self.precision == "fp16"
-        with torch.inference_mode():
-            if use_amp:
-                with torch.autocast(device_type="cuda", dtype=torch.float16):
+        split_at = None
+        try:
+            with torch.inference_mode():
+                if use_amp:
+                    with torch.autocast(device_type="cuda", dtype=torch.float16):
+                        predictions = self.model.forward(tensor, retrieve_tokens=True)
+                else:
                     predictions = self.model.forward(tensor, retrieve_tokens=True)
-            else:
-                predictions = self.model.forward(tensor, retrieve_tokens=True)
+        except RuntimeError as error:
+            is_oom = isinstance(error, torch.OutOfMemoryError) or "out of memory" in str(
+                error
+            ).lower()
+            if not is_oom or len(images) == 1:
+                raise
+            split_at = len(images) // 2
+        if split_at is not None:
+            # Leave the exception block before retrying so failed-forward
+            # tensors retained by its traceback can be reclaimed.
+            del tensor
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            print(
+                f"[cellvit] CUDA OOM at batch {len(images)}; retrying "
+                f"as {split_at}+{len(images) - split_at}",
+                flush=True,
+            )
+            return self.infer_batch(images[:split_at]) + self.infer_batch(
+                images[split_at:]
+            )
         required = ("nuclei_binary_map", "nuclei_type_map", "hv_map")
         if not all(torch.isfinite(predictions[name]).all() for name in required):
             if not use_amp:
@@ -149,7 +176,10 @@ class CellViTRunner:
                 raise RuntimeError("CellViT produced non-finite predictions after FP32 retry")
         predictions = self._prepare(predictions)
         _, cell_dicts = self.postprocessor.post_process_batch(predictions)
-        return cell_dicts[0]
+        return cell_dicts
+
+    def infer(self, image: Image.Image) -> dict:
+        return self.infer_batch([image])[0]
 
     def unload(self) -> None:
         self.model = None

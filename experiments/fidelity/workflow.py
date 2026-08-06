@@ -38,6 +38,18 @@ def add_common_arguments(parser: argparse.ArgumentParser) -> None:
         "--cellvit-precision", choices=("auto", "fp16", "fp32"), default="auto"
     )
     parser.add_argument(
+        "--generation-batch-size",
+        type=int,
+        default=4,
+        help="PathOGen inference batch size; CUDA OOM automatically halves it",
+    )
+    parser.add_argument(
+        "--cellvit-batch-size",
+        type=int,
+        default=8,
+        help="CellViT++ inference batch size; CUDA OOM automatically halves it",
+    )
+    parser.add_argument(
         "--guidance-hook",
         help="Optional module:factory returning experiments.fidelity.guidance.GuidanceHook",
     )
@@ -171,6 +183,79 @@ class ExperimentRuntime:
         write_json(metadata_path, metadata)
         return image_path, metadata
 
+    def ensure_generated_batch(
+        self,
+        contexts: list[GenerationContext],
+        artifact_names: list[str],
+        *,
+        steps: int | None = None,
+        spatial_strength: float | None = None,
+    ) -> list[tuple[Path, dict[str, Any]]]:
+        """Generate missing artifacts as one model batch and preserve input order."""
+        if len(contexts) != len(artifact_names):
+            raise ValueError("contexts and artifact_names must have equal length")
+        actual_steps = self.args.steps if steps is None else int(steps)
+        actual_spatial_strength = (
+            self.args.spatial_strength
+            if spatial_strength is None
+            else float(spatial_strength)
+        )
+        outputs: list[tuple[Path, dict[str, Any]] | None] = [None] * len(contexts)
+        missing_indices = []
+        for index, name in enumerate(artifact_names):
+            image_path = self.generated_dir / f"{safe_name(name)}.png"
+            metadata_path = self.metadata_dir / f"{safe_name(name)}.json"
+            if image_path.is_file() and not self.args.overwrite:
+                metadata = (
+                    json.loads(metadata_path.read_text(encoding="utf-8"))
+                    if metadata_path.is_file()
+                    else {}
+                )
+                outputs[index] = (image_path, metadata)
+            else:
+                missing_indices.append(index)
+        if missing_indices:
+            if self.args.analysis_only:
+                first = self.generated_dir / f"{safe_name(artifact_names[missing_indices[0]])}.png"
+                raise FileNotFoundError(f"Required generated artifact missing: {first}")
+            results = self.generator.generate_batch(
+                [contexts[index] for index in missing_indices],
+                steps=actual_steps,
+                spatial_strength=actual_spatial_strength,
+                hook=self.hook,
+                max_attempts=self.args.max_guidance_attempts,
+            )
+            for index, result in zip(missing_indices, results):
+                name = artifact_names[index]
+                if not result.decision.accept and not self.args.keep_rejected:
+                    raise RuntimeError(
+                        f"Guidance rejected {name}: {result.decision.reason}"
+                    )
+                image_path = self.generated_dir / f"{safe_name(name)}.png"
+                metadata_path = self.metadata_dir / f"{safe_name(name)}.json"
+                image_path.parent.mkdir(parents=True, exist_ok=True)
+                result.image.save(image_path)
+                metadata = {
+                    "stem": result.context.stem,
+                    "condition_id": result.context.condition_id,
+                    "seed": result.context.seed,
+                    "attempt": result.context.attempt,
+                    "morphology": result.context.morphology.astype(float).tolist(),
+                    "steps": actual_steps,
+                    "spatial_strength": actual_spatial_strength,
+                    "seconds": round(result.seconds, 3),
+                    "accepted": result.decision.accept,
+                    "guidance_score": result.decision.score,
+                    "guidance_reason": result.decision.reason,
+                    "guidance_metadata": result.context.metadata,
+                    "generator": self.generator.describe(),
+                }
+                write_json(metadata_path, metadata)
+                outputs[index] = (image_path, metadata)
+        if any(output is None for output in outputs):
+            raise RuntimeError("Internal error: incomplete batched generation outputs")
+        return [output for output in outputs if output is not None]
+
     def ensure_cellvit(self, image_path: Path, artifact_name: str) -> Path:
         geojson_path = self.cellvit_dir / f"{safe_name(artifact_name)}.geojson"
         if geojson_path.is_file() and not self.args.overwrite:
@@ -180,6 +265,37 @@ class ExperimentRuntime:
         cells = self.cellvit.infer(Image.open(image_path).convert("RGB"))
         save_cellvit_geojson(cells, geojson_path)
         return geojson_path
+
+    def ensure_cellvit_batch(
+        self, image_paths: list[Path], artifact_names: list[str]
+    ) -> list[Path]:
+        """Segment missing image artifacts as one CellViT++ model batch."""
+        if len(image_paths) != len(artifact_names):
+            raise ValueError("image_paths and artifact_names must have equal length")
+        outputs: list[Path | None] = [None] * len(image_paths)
+        missing_indices = []
+        for index, name in enumerate(artifact_names):
+            geojson_path = self.cellvit_dir / f"{safe_name(name)}.geojson"
+            if geojson_path.is_file() and not self.args.overwrite:
+                outputs[index] = geojson_path
+            else:
+                missing_indices.append(index)
+        if missing_indices:
+            if self.args.analysis_only:
+                first = self.cellvit_dir / f"{safe_name(artifact_names[missing_indices[0]])}.geojson"
+                raise FileNotFoundError(f"Required CellViT artifact missing: {first}")
+            images = []
+            for index in missing_indices:
+                with Image.open(image_paths[index]) as image:
+                    images.append(image.convert("RGB"))
+            cell_batches = self.cellvit.infer_batch(images)
+            for index, cells in zip(missing_indices, cell_batches):
+                geojson_path = self.cellvit_dir / f"{safe_name(artifact_names[index])}.geojson"
+                save_cellvit_geojson(cells, geojson_path)
+                outputs[index] = geojson_path
+        if any(output is None for output in outputs):
+            raise RuntimeError("Internal error: incomplete batched CellViT outputs")
+        return [output for output in outputs if output is not None]
 
     def close(self) -> None:
         if self._generator is not None:
