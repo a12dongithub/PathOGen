@@ -473,7 +473,7 @@ def main() -> None:
             baseline = sample.morphology
             if not load_cells(sample.geojson_path):
                 raise RuntimeError(f"Source GeoJSON has no recognized cells: {stem}")
-            for config_index, config in enumerate(DEFAULT_CONFIGS, start=1):
+            for config in DEFAULT_CONFIGS:
                 changed, _ = green_condition(
                     baseline, config.green_sd, green_lower, green_upper
                 )
@@ -555,15 +555,22 @@ def main() -> None:
     )
     baseline_metrics = None
     if not args.skip_metrics:
-        baseline_metrics = calculate_fid_kid(
-            real_dir,
-            baseline_dir,
-            args.kid_subset_size,
-            args.kid_subsets,
-            args.seed,
-        )
-        write_json(experiment_dir / "metrics_before_reranking.json", baseline_metrics)
-        print(f"[metrics before] {baseline_metrics}", flush=True)
+        baseline_metrics_path = experiment_dir / "metrics_before_reranking.json"
+        if baseline_metrics_path.is_file() and not args.overwrite:
+            cached = json.loads(baseline_metrics_path.read_text(encoding="utf-8"))
+            if int(cached.get("images", -1)) == len(stems):
+                baseline_metrics = cached
+                print(f"[metrics before reused] {baseline_metrics}", flush=True)
+        if baseline_metrics is None:
+            baseline_metrics = calculate_fid_kid(
+                real_dir,
+                baseline_dir,
+                args.kid_subset_size,
+                args.kid_subsets,
+                args.seed,
+            )
+            write_json(baseline_metrics_path, baseline_metrics)
+            print(f"[metrics before] {baseline_metrics}", flush=True)
 
     if args.baseline_only:
         write_json(
@@ -591,7 +598,7 @@ def main() -> None:
             source_cells = load_cells(phase_two.catalog.sample(stem).geojson_path)
             candidate_rows = []
             candidate_order = 0
-            for config in DEFAULT_CONFIGS:
+            for config_index, config in enumerate(DEFAULT_CONFIGS, start=1):
                 entries = []
                 for seed_index in range(args.seeds_per_config):
                     context, green_details = context_for_candidate(
