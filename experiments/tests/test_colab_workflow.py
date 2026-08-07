@@ -9,8 +9,11 @@ import unittest
 import zipfile
 from argparse import Namespace
 from pathlib import Path
+from unittest.mock import patch
 
 import numpy as np
+import pandas as pd
+from PIL import Image
 
 from experiments.colab.layout import (
     REPO_ROOT,
@@ -27,6 +30,7 @@ from experiments.colab.setup_colab import (
 )
 from experiments.fidelity.constants import MORPH_FEATURES
 from experiments.fidelity.data import CellObservation
+from experiments.fidelity.workflow import load_rgb_with_retry
 
 
 def load_rerank_module():
@@ -168,6 +172,54 @@ class ColabWorkflowTests(unittest.TestCase):
             self.rerank.batches(list(range(10)), 4),
             [[0, 1, 2, 3], [4, 5, 6, 7], [8, 9]],
         )
+
+    def test_drive_image_read_retries_transient_oserror(self):
+        with tempfile.TemporaryDirectory() as directory:
+            image_path = Path(directory) / "candidate.png"
+            Image.new("RGB", (8, 8), (12, 34, 56)).save(image_path)
+            real_open = Image.open
+            calls = 0
+
+            def flaky_open(*args, **kwargs):
+                nonlocal calls
+                calls += 1
+                if calls == 1:
+                    raise OSError(5, "Input/output error")
+                return real_open(*args, **kwargs)
+
+            with (
+                patch("experiments.fidelity.workflow.Image.open", side_effect=flaky_open),
+                patch("experiments.fidelity.workflow.time.sleep"),
+            ):
+                loaded = load_rgb_with_retry(image_path, attempts=2)
+            self.assertEqual(loaded.getpixel((0, 0)), (12, 34, 56))
+            self.assertEqual(calls, 2)
+
+    def test_rerank_progress_resumes_complete_prefix(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            stems = ["case_a", "case_b", "case_c"]
+            configs = len(self.rerank.DEFAULT_CONFIGS)
+            seeds = 2
+            score_rows = [
+                {"stem": stem, "candidate_order": candidate}
+                for stem in stems[:2]
+                for candidate in range(configs * seeds)
+            ]
+            selection_rows = [
+                {"stem": stem, "selected_image": f"{stem}.png"}
+                for stem in stems[:2]
+            ]
+            pd.DataFrame(score_rows).to_csv(root / "candidate_scores.csv", index=False)
+            pd.DataFrame(selection_rows).to_csv(
+                root / "selected_candidates.csv", index=False
+            )
+            scores, selections, completed = self.rerank.load_rerank_progress(
+                root, stems, seeds_per_config=seeds, overwrite=False
+            )
+            self.assertEqual(completed, 2)
+            self.assertEqual(len(scores), 2 * configs * seeds)
+            self.assertEqual(len(selections), 2)
 
     def test_spatial_point_score_is_plus_one_zero_minus_one(self):
         source = [

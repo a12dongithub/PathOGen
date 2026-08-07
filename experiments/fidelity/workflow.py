@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import time
 from pathlib import Path
 from typing import Any
 
@@ -85,6 +86,32 @@ def safe_name(value: str) -> str:
 def write_json(path: Path, payload: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+
+def load_rgb_with_retry(
+    path: Path, attempts: int = 6, initial_delay: float = 0.5
+) -> Image.Image:
+    """Fully read an RGB image, retrying transient mounted-Drive I/O failures."""
+    last_error: OSError | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            with Image.open(path) as image:
+                image.load()
+                return image.convert("RGB")
+        except OSError as error:
+            last_error = error
+            if attempt == attempts:
+                break
+            delay = min(initial_delay * (2 ** (attempt - 1)), 8.0)
+            print(
+                f"[io] Read failed for {path} ({error}); retry "
+                f"{attempt + 1}/{attempts} in {delay:.1f}s",
+                flush=True,
+            )
+            time.sleep(delay)
+    raise OSError(
+        f"Could not read image after {attempts} attempts: {path}"
+    ) from last_error
 
 
 class ExperimentRuntime:
@@ -262,7 +289,7 @@ class ExperimentRuntime:
             return geojson_path
         if self.args.analysis_only:
             raise FileNotFoundError(f"Required CellViT artifact missing: {geojson_path}")
-        cells = self.cellvit.infer(Image.open(image_path).convert("RGB"))
+        cells = self.cellvit.infer(load_rgb_with_retry(image_path))
         save_cellvit_geojson(cells, geojson_path)
         return geojson_path
 
@@ -286,8 +313,7 @@ class ExperimentRuntime:
                 raise FileNotFoundError(f"Required CellViT artifact missing: {first}")
             images = []
             for index in missing_indices:
-                with Image.open(image_paths[index]) as image:
-                    images.append(image.convert("RGB"))
+                images.append(load_rgb_with_retry(image_paths[index]))
             cell_batches = self.cellvit.infer_batch(images)
             for index, cells in zip(missing_indices, cell_batches):
                 geojson_path = self.cellvit_dir / f"{safe_name(artifact_names[index])}.geojson"

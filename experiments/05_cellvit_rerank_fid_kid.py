@@ -103,6 +103,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Calculate baseline FID/KID and stop before candidate reranking",
     )
+    parser.add_argument(
+        "--skip-baseline",
+        action="store_true",
+        help="Require and reuse the cached baseline metric/images, then start reranking",
+    )
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument(
         "--skip-metrics",
@@ -392,6 +397,49 @@ def batches(values: list[Any], batch_size: int) -> list[list[Any]]:
     ]
 
 
+def load_rerank_progress(
+    experiment_dir: Path,
+    stems: list[str],
+    seeds_per_config: int,
+    overwrite: bool,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], int]:
+    """Resume from the last fully checkpointed input prefix."""
+    if overwrite:
+        return [], [], 0
+    scores_path = experiment_dir / "candidate_scores.csv"
+    selections_path = experiment_dir / "selected_candidates.csv"
+    if not scores_path.is_file() or not selections_path.is_file():
+        return [], [], 0
+    try:
+        score_frame = pd.read_csv(scores_path)
+        selection_frame = pd.read_csv(selections_path)
+    except (OSError, pd.errors.ParserError) as error:
+        print(f"[resume] Could not read progress CSVs; rebuilding: {error}", flush=True)
+        return [], [], 0
+    if "stem" not in score_frame or "stem" not in selection_frame:
+        print("[resume] Progress CSVs lack stem columns; rebuilding", flush=True)
+        return [], [], 0
+    completed_stems = selection_frame["stem"].astype(str).tolist()
+    expected_rows = len(completed_stems) * len(DEFAULT_CONFIGS) * seeds_per_config
+    if completed_stems != stems[: len(completed_stems)] or len(score_frame) != expected_rows:
+        print(
+            "[resume] Progress CSVs do not match the requested stem/config prefix; "
+            "rebuilding from artifacts",
+            flush=True,
+        )
+        return [], [], 0
+    print(
+        f"[resume] Loaded {len(completed_stems)} completed inputs and "
+        f"{len(score_frame)} candidate scores",
+        flush=True,
+    )
+    return (
+        score_frame.to_dict(orient="records"),
+        selection_frame.to_dict(orient="records"),
+        len(completed_stems),
+    )
+
+
 def main() -> None:
     args = parse_args()
     if args.num_images < 1:
@@ -406,6 +454,8 @@ def main() -> None:
         raise ValueError("seeds-per-config must be positive")
     if args.save_every < 1:
         raise ValueError("save-every must be positive")
+    if args.baseline_only and args.skip_baseline:
+        raise ValueError("baseline-only and skip-baseline cannot be used together")
 
     catalog = DatasetCatalog(args.data_dir)
     stems = catalog.select(args.num_images, args.seed, args.stems)
@@ -449,6 +499,7 @@ def main() -> None:
         "cellvit_batch_size": args.cellvit_batch_size,
         "baseline": {"config_id": BASELINE_CONFIG_ID, "seed_index": 0},
         "baseline_only": args.baseline_only,
+        "skip_baseline": args.skip_baseline,
         "green_allowed_standardized_range": [green_lower, green_upper],
         "score": {
             "input_cells": "exact source GeoJSON centroids used to create the conditioning map",
@@ -502,60 +553,87 @@ def main() -> None:
     )
 
     # Phase 1: generate exactly one fixed baseline candidate per condition, then
-    # calculate baseline FID/KID before any CellViT++ selection.
-    phase_one = ExperimentRuntime(args)
-    baseline_rows = []
-    try:
-        completed = 0
-        for stem_batch in batches(stems, args.generation_batch_size):
-            entries = []
-            for stem in stem_batch:
-                sample = phase_one.catalog.sample(stem)
-                context, green_details = context_for_candidate(
-                    phase_one, stem, baseline_config, 0, green_lower, green_upper
-                )
-                entries.append(
-                    (
-                        stem,
-                        sample,
-                        context,
-                        green_details,
-                        artifact_name(stem, baseline_config, 0),
-                    )
-                )
-            generated = phase_one.ensure_generated_batch(
-                [entry[2] for entry in entries],
-                [entry[4] for entry in entries],
-                steps=baseline_config.denoising_steps,
-                spatial_strength=baseline_config.controlnet_strength,
-            )
-            for entry, (image_path, generation_metadata) in zip(entries, generated):
-                stem, sample, context, green_details, _ = entry
-                copy_image(sample.image_path, real_dir / f"{stem}.png", args.overwrite)
-                copy_image(image_path, baseline_dir / f"{stem}.png", args.overwrite)
-                baseline_rows.append(
-                    {
-                        "stem": stem,
-                        "generated_image": str(image_path),
-                        "real_image": str(sample.image_path),
-                        "seed": context.seed,
-                        **asdict(baseline_config),
-                        **green_details,
-                        "generation_seconds": generation_metadata.get(
-                            "seconds", np.nan
-                        ),
-                    }
-                )
-                completed += 1
-                print(f"[baseline {completed}/{len(stems)}] {stem}", flush=True)
-    finally:
-        phase_one.close()
-    pd.DataFrame(baseline_rows).to_csv(
-        experiment_dir / "baseline_images.csv", index=False
-    )
+    # calculate baseline FID/KID before any CellViT++ selection. A reset Colab
+    # runtime can bypass this entire phase when the Drive-backed cache is complete.
+    baseline_metrics_path = experiment_dir / "metrics_before_reranking.json"
     baseline_metrics = None
-    if not args.skip_metrics:
-        baseline_metrics_path = experiment_dir / "metrics_before_reranking.json"
+    if args.skip_baseline:
+        real_count = len(list(real_dir.glob("*.png")))
+        baseline_count = len(list(baseline_dir.glob("*.png")))
+        if real_count != len(stems) or baseline_count != len(stems):
+            raise RuntimeError(
+                "Cannot skip baseline: cached metric sets are incomplete "
+                f"(expected={len(stems)}, real={real_count}, baseline={baseline_count})"
+            )
+        if not args.skip_metrics:
+            if not baseline_metrics_path.is_file():
+                raise FileNotFoundError(
+                    f"Cannot skip baseline: cached metrics missing: {baseline_metrics_path}"
+                )
+            baseline_metrics = json.loads(
+                baseline_metrics_path.read_text(encoding="utf-8")
+            )
+            if int(baseline_metrics.get("images", -1)) != len(stems):
+                raise RuntimeError(
+                    "Cannot skip baseline: cached metric image count does not match "
+                    f"the requested {len(stems)} inputs"
+                )
+        print(f"[baseline skipped] reused {len(stems)} cached image pairs", flush=True)
+        if baseline_metrics is not None:
+            print(f"[metrics before reused] {baseline_metrics}", flush=True)
+    else:
+        phase_one = ExperimentRuntime(args)
+        baseline_rows = []
+        try:
+            completed = 0
+            for stem_batch in batches(stems, args.generation_batch_size):
+                entries = []
+                for stem in stem_batch:
+                    sample = phase_one.catalog.sample(stem)
+                    context, green_details = context_for_candidate(
+                        phase_one, stem, baseline_config, 0, green_lower, green_upper
+                    )
+                    entries.append(
+                        (
+                            stem,
+                            sample,
+                            context,
+                            green_details,
+                            artifact_name(stem, baseline_config, 0),
+                        )
+                    )
+                generated = phase_one.ensure_generated_batch(
+                    [entry[2] for entry in entries],
+                    [entry[4] for entry in entries],
+                    steps=baseline_config.denoising_steps,
+                    spatial_strength=baseline_config.controlnet_strength,
+                )
+                for entry, (image_path, generation_metadata) in zip(entries, generated):
+                    stem, sample, context, green_details, _ = entry
+                    copy_image(sample.image_path, real_dir / f"{stem}.png", args.overwrite)
+                    copy_image(image_path, baseline_dir / f"{stem}.png", args.overwrite)
+                    baseline_rows.append(
+                        {
+                            "stem": stem,
+                            "generated_image": str(image_path),
+                            "real_image": str(sample.image_path),
+                            "seed": context.seed,
+                            **asdict(baseline_config),
+                            **green_details,
+                            "generation_seconds": generation_metadata.get(
+                                "seconds", np.nan
+                            ),
+                        }
+                    )
+                    completed += 1
+                    print(f"[baseline {completed}/{len(stems)}] {stem}", flush=True)
+        finally:
+            phase_one.close()
+        pd.DataFrame(baseline_rows).to_csv(
+            experiment_dir / "baseline_images.csv", index=False
+        )
+
+    if not args.skip_metrics and baseline_metrics is None:
         if baseline_metrics_path.is_file() and not args.overwrite:
             cached = json.loads(baseline_metrics_path.read_text(encoding="utf-8"))
             if int(cached.get("images", -1)) == len(stems):
@@ -591,10 +669,13 @@ def main() -> None:
     # Phase 2: generate/reuse all candidates, run CellViT++, apply only the
     # requested spatial/type point score, and copy the highest-scoring candidate.
     phase_two = ExperimentRuntime(args)
-    all_rows: list[dict[str, Any]] = []
-    selections = []
+    all_rows, selections, completed_inputs = load_rerank_progress(
+        experiment_dir, stems, args.seeds_per_config, args.overwrite
+    )
     try:
-        for input_index, stem in enumerate(stems, start=1):
+        for input_index, stem in enumerate(
+            stems[completed_inputs:], start=completed_inputs + 1
+        ):
             source_cells = load_cells(phase_two.catalog.sample(stem).geojson_path)
             candidate_rows = []
             candidate_order = 0

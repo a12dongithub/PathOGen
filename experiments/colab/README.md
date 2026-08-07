@@ -143,6 +143,22 @@ candidate grid. A later full run with identical arguments reuses these artifacts
   --seed 42
 ```
 
+After a Colab reset, bypass the baseline phase completely when the corresponding
+Drive-backed metric sets and `metrics_before_reranking.json` already exist:
+
+```python
+!python experiments/05_cellvit_rerank_fid_kid.py \
+  --num-images 2000 \
+  --seeds-per-config 8 \
+  --generation-batch-size 4 \
+  --cellvit-batch-size 4 \
+  --skip-baseline \
+  --seed 42
+```
+
+Generated candidate images are read with exponential-backoff retries to tolerate
+transient mounted-Drive `Errno 5` failures.
+
 The script reads `assets/runtime_paths.json`, so no asset paths are needed after setup. For each input cell, unique CellViT++ detections are assigned with the following only ranking score:
 
 - same type within 50 pixels: `+1`;
