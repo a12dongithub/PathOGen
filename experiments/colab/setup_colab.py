@@ -44,6 +44,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--cellvit-model", type=Path)
     parser.add_argument("--cellvit-model-url")
     parser.add_argument("--cellvit-model-name", default="CellViT-256-x40-AMP.pth")
+    parser.add_argument(
+        "--data-archive",
+        type=Path,
+        help="Mounted/local dataset ZIP; bypasses the public Google Drive download",
+    )
+    parser.add_argument(
+        "--model-archive",
+        type=Path,
+        help="Mounted/local PathOGen checkpoint ZIP; bypasses the public download",
+    )
     parser.add_argument("--data-url", default=DATA_URL)
     parser.add_argument("--model-url", default=MODEL_URL)
     parser.add_argument("--cellvit-git-url", default=CELLVIT_GIT_URL)
@@ -115,6 +125,7 @@ def locate_or_prepare_zip(
     url: str,
     finder: Callable[[Path], Path],
     keep_archive: bool,
+    source_archive: Path | None = None,
 ) -> Path:
     try:
         resolved = finder(search_root)
@@ -122,12 +133,20 @@ def locate_or_prepare_zip(
         return resolved
     except FileNotFoundError:
         pass
-    downloaded = download_drive_file(url, archive)
-    safe_extract_zip(downloaded, search_root)
+    if source_archive is not None:
+        extracted_from = source_archive.expanduser().resolve()
+        if not extracted_from.is_file():
+            raise FileNotFoundError(f"Mounted/local ZIP not found: {extracted_from}")
+        print(f"[assets] Using mounted/local archive: {extracted_from}", flush=True)
+    else:
+        extracted_from = download_drive_file(url, archive)
+    safe_extract_zip(extracted_from, search_root)
     resolved = finder(search_root)
-    if not keep_archive:
-        downloaded.unlink(missing_ok=True)
-        print(f"[assets] Deleted extracted archive: {downloaded}")
+    if source_archive is not None:
+        print(f"[assets] Preserved mounted/local archive: {extracted_from}")
+    elif not keep_archive:
+        extracted_from.unlink(missing_ok=True)
+        print(f"[assets] Deleted extracted archive: {extracted_from}")
     return resolved
 
 
@@ -307,6 +326,7 @@ def main() -> None:
         args.data_url,
         find_dataset,
         args.keep_archives,
+        args.data_archive,
     )
     checkpoint_dir = locate_or_prepare_zip(
         checkpoint_root,
@@ -314,6 +334,7 @@ def main() -> None:
         args.model_url,
         find_checkpoint,
         args.keep_archives,
+        args.model_archive,
     )
     cellvit_root = prepare_cellvit_source(
         cellvit_search_root, args.cellvit_git_url, args.cellvit_git_ref

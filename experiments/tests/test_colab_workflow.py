@@ -20,7 +20,11 @@ from experiments.colab.layout import (
     find_checkpoint,
     find_dataset,
 )
-from experiments.colab.setup_colab import resolve_cellvit_model, safe_extract_zip
+from experiments.colab.setup_colab import (
+    locate_or_prepare_zip,
+    resolve_cellvit_model,
+    safe_extract_zip,
+)
 from experiments.fidelity.constants import MORPH_FEATURES
 from experiments.fidelity.data import CellObservation
 
@@ -123,6 +127,31 @@ class ColabWorkflowTests(unittest.TestCase):
             resolved = resolve_cellvit_model(args, root / "assets")
             self.assertEqual(resolved.name, "CellViT-256-x40-AMP.pth")
             self.assertTrue(resolved.is_file())
+
+    def test_mounted_archive_is_extracted_and_preserved(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            archive = root / "mounted" / "dataset.zip"
+            archive.parent.mkdir()
+            with zipfile.ZipFile(archive, "w") as handle:
+                handle.writestr("dataset/ready.txt", "ready")
+
+            def find_ready(search_root: Path) -> Path:
+                ready = search_root / "dataset" / "ready.txt"
+                if not ready.is_file():
+                    raise FileNotFoundError(ready)
+                return ready.parent
+
+            resolved = locate_or_prepare_zip(
+                root / "extract",
+                root / "unused-download.zip",
+                "https://unused.invalid/file.zip",
+                find_ready,
+                keep_archive=False,
+                source_archive=archive,
+            )
+            self.assertEqual(resolved, root / "extract" / "dataset")
+            self.assertTrue(archive.is_file())
 
     def test_rerank_has_focused_green_seed_configs(self):
         configs = self.rerank.DEFAULT_CONFIGS

@@ -43,6 +43,19 @@ Setup performs the following steps:
 
 Preparing both ZIPs requires approximately 55 GiB of free disk. Archives are deleted after successful extraction by default.
 
+Public Drive files can temporarily hit Google's download quota. When the ZIP is
+available on mounted Drive, bypass `gdown` with its local path. Setup preserves
+mounted archives and still reuses an already extracted dataset:
+
+```python
+!python experiments/colab/setup_colab.py \
+  --data-archive "/content/drive/MyDrive/PTRI/CVPR/512_final_dataset.zip" \
+  --cellvit-model "/content/drive/MyDrive/PathOGenAssets/cellvit-model.zip" \
+  --output-root "/content/drive/MyDrive/PathOGenResults"
+```
+
+The equivalent option for the diffusion checkpoint is `--model-archive`.
+
 The default CellViT++ source is pinned to a tested upstream commit. Override it only when intentionally validating a different revision with `--cellvit-git-ref`.
 
 ## 3. Verify before spending GPU time
