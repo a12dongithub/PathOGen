@@ -100,6 +100,14 @@ def _metrics(records: list[dict[str, Any]], output: Path) -> None:
 
 def main() -> None:
     args = _args()
+    # CLI paths are repository-relative by convention, while ConditionStore
+    # interprets supplied relative paths relative to its data root.
+    if args.images_dir is not None and not args.images_dir.is_absolute():
+        args.images_dir = (REPO / args.images_dir).resolve()
+    if args.spatial_maps_dir is not None and not args.spatial_maps_dir.is_absolute():
+        args.spatial_maps_dir = (REPO / args.spatial_maps_dir).resolve()
+    if args.morphology_table is not None and not args.morphology_table.is_absolute():
+        args.morphology_table = (REPO / args.morphology_table).resolve()
     out = args.output_dir.expanduser().resolve()
     if out.exists() and any(out.iterdir()) and not args.overwrite:
         raise FileExistsError(f"Output directory is not empty: {out}")
