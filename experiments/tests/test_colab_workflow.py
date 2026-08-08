@@ -173,6 +173,32 @@ class ColabWorkflowTests(unittest.TestCase):
             [[0, 1, 2, 3], [4, 5, 6, 7], [8, 9]],
         )
 
+    def test_rerank_batch_32_spans_two_source_inputs(self):
+        self.assertEqual(
+            self.rerank.rerank_input_window_size(
+                self.rerank.DEFAULT_CONFIGS,
+                seeds_per_config=8,
+                generation_batch_size=32,
+                cellvit_batch_size=32,
+            ),
+            2,
+        )
+
+    def test_rerank_window_accounts_for_different_generation_settings(self):
+        configs = (
+            self.rerank.CandidateConfig("a", 0.0, 1.0, 20),
+            self.rerank.CandidateConfig("b", -1.0, 2.0, 30),
+        )
+        self.assertEqual(
+            self.rerank.rerank_input_window_size(
+                configs,
+                seeds_per_config=8,
+                generation_batch_size=32,
+                cellvit_batch_size=32,
+            ),
+            4,
+        )
+
     def test_drive_image_read_retries_transient_oserror(self):
         with tempfile.TemporaryDirectory() as directory:
             image_path = Path(directory) / "candidate.png"

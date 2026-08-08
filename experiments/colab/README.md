@@ -119,14 +119,16 @@ One entrypoint runs the complete comparison: it generates one fixed baseline ima
   --num-images 100 \
   --seeds-per-config 8 \
   --match-radius 50 \
-  --generation-batch-size 4 \
-  --cellvit-batch-size 4 \
+  --generation-batch-size 32 \
+  --cellvit-batch-size 32 \
   --seed 42
 ```
 
-The L4-oriented defaults are a PathOGen batch of 4 and CellViT++ batch of 4.
+The portable defaults remain a PathOGen batch of 4 and CellViT++ batch of 4.
 Both backends automatically halve their current batch after a CUDA out-of-memory
-error, so trying `--generation-batch-size 8` is safe. Each sample retains its own
+error; use batch size 32 as a conservative A100 starting point. Reranking
+flattens candidates across source cases: with 16 candidates per case, batch size
+32 processes two source cases together. Each sample retains its own
 deterministic `torch.Generator`, and batching therefore does not reuse noise across
 candidates. Score CSVs are checkpointed every 10 completed inputs by default; use
 `--save-every` to change that interval.
@@ -138,7 +140,7 @@ candidate grid. A later full run with identical arguments reuses these artifacts
 !python experiments/05_cellvit_rerank_fid_kid.py \
   --num-images 5000 \
   --seeds-per-config 8 \
-  --generation-batch-size 4 \
+  --generation-batch-size 32 \
   --baseline-only \
   --seed 42
 ```
@@ -150,8 +152,8 @@ Drive-backed metric sets and `metrics_before_reranking.json` already exist:
 !python experiments/05_cellvit_rerank_fid_kid.py \
   --num-images 2000 \
   --seeds-per-config 8 \
-  --generation-batch-size 4 \
-  --cellvit-batch-size 4 \
+  --generation-batch-size 32 \
+  --cellvit-batch-size 32 \
   --skip-baseline \
   --seed 42
 ```

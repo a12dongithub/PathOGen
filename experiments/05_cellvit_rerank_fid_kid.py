@@ -8,6 +8,7 @@ import hashlib
 import json
 import math
 import sys
+from collections import Counter
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -38,6 +39,20 @@ class CandidateConfig:
     green_sd: float
     controlnet_strength: float
     denoising_steps: int
+
+
+@dataclass
+class CandidateJob:
+    input_index: int
+    stem: str
+    candidate_order: int
+    config: CandidateConfig
+    seed_index: int
+    context: GenerationContext
+    green_details: dict[str, Any]
+    artifact_name: str
+    generated_result: tuple[Path, dict[str, Any]] | None = None
+    cellvit_geojson: Path | None = None
 
 
 # Focused design after the first 100-case pilot: spatial-conditioning strength is
@@ -80,13 +95,19 @@ def parse_args() -> argparse.Namespace:
         "--generation-batch-size",
         type=int,
         default=4,
-        help="PathOGen batch size; automatically halved if CUDA runs out of memory",
+        help=(
+            "Maximum PathOGen batch across source cases; automatically halved if "
+            "CUDA runs out of memory"
+        ),
     )
     parser.add_argument(
         "--cellvit-batch-size",
         type=int,
         default=4,
-        help="CellViT++ batch size; automatically halved if CUDA runs out of memory",
+        help=(
+            "Maximum CellViT++ batch across source cases; automatically halved if "
+            "CUDA runs out of memory"
+        ),
     )
     parser.add_argument(
         "--save-every",
@@ -397,6 +418,67 @@ def batches(values: list[Any], batch_size: int) -> list[list[Any]]:
     ]
 
 
+def rerank_input_window_size(
+    configs: tuple[CandidateConfig, ...],
+    seeds_per_config: int,
+    generation_batch_size: int,
+    cellvit_batch_size: int,
+) -> int:
+    """Choose enough source cases to fill both candidate-model batches.
+
+    Generation calls require common denoising steps and spatial strength, while
+    CellViT++ can consume every candidate together. The returned window is only a
+    scheduling unit; each model call is still capped by its requested batch size.
+    """
+
+    generation_groups = Counter(
+        (config.denoising_steps, config.controlnet_strength) for config in configs
+    )
+    candidates_per_input = len(configs) * seeds_per_config
+    generation_inputs = max(
+        math.ceil(generation_batch_size / (config_count * seeds_per_config))
+        for config_count in generation_groups.values()
+    )
+    cellvit_inputs = math.ceil(cellvit_batch_size / candidates_per_input)
+    return max(1, generation_inputs, cellvit_inputs)
+
+
+def build_candidate_jobs(
+    runtime: ExperimentRuntime,
+    stems: list[str],
+    first_input_index: int,
+    seeds_per_config: int,
+    green_lower: float,
+    green_upper: float,
+) -> list[CandidateJob]:
+    jobs = []
+    for stem_offset, stem in enumerate(stems):
+        input_index = first_input_index + stem_offset
+        for config_index, config in enumerate(DEFAULT_CONFIGS):
+            for seed_index in range(seeds_per_config):
+                context, green_details = context_for_candidate(
+                    runtime,
+                    stem,
+                    config,
+                    seed_index,
+                    green_lower,
+                    green_upper,
+                )
+                jobs.append(
+                    CandidateJob(
+                        input_index=input_index,
+                        stem=stem,
+                        candidate_order=config_index * seeds_per_config + seed_index,
+                        config=config,
+                        seed_index=seed_index,
+                        context=context,
+                        green_details=green_details,
+                        artifact_name=artifact_name(stem, config, seed_index),
+                    )
+                )
+    return jobs
+
+
 def load_rerank_progress(
     experiment_dir: Path,
     stems: list[str],
@@ -497,6 +579,7 @@ def main() -> None:
         * args.seeds_per_config,
         "generation_batch_size": args.generation_batch_size,
         "cellvit_batch_size": args.cellvit_batch_size,
+        "rerank_batching": "candidates flattened across source inputs",
         "baseline": {"config_id": BASELINE_CONFIG_ID, "seed_index": 0},
         "baseline_only": args.baseline_only,
         "skip_baseline": args.skip_baseline,
@@ -672,103 +755,128 @@ def main() -> None:
     all_rows, selections, completed_inputs = load_rerank_progress(
         experiment_dir, stems, args.seeds_per_config, args.overwrite
     )
+    input_window_size = rerank_input_window_size(
+        DEFAULT_CONFIGS,
+        args.seeds_per_config,
+        args.generation_batch_size,
+        args.cellvit_batch_size,
+    )
+    print(
+        f"[rerank batching] up to {input_window_size} source inputs per window; "
+        f"generation batch={args.generation_batch_size}, "
+        f"CellViT batch={args.cellvit_batch_size}",
+        flush=True,
+    )
     try:
-        for input_index, stem in enumerate(
-            stems[completed_inputs:], start=completed_inputs + 1
-        ):
-            source_cells = load_cells(phase_two.catalog.sample(stem).geojson_path)
-            candidate_rows = []
-            candidate_order = 0
-            for config_index, config in enumerate(DEFAULT_CONFIGS, start=1):
-                entries = []
-                for seed_index in range(args.seeds_per_config):
-                    context, green_details = context_for_candidate(
-                        phase_two,
-                        stem,
-                        config,
-                        seed_index,
-                        green_lower,
-                        green_upper,
-                    )
-                    name = artifact_name(stem, config, seed_index)
-                    entries.append((seed_index, context, green_details, name))
+        remaining_stems = stems[completed_inputs:]
+        processed_inputs = completed_inputs
+        for stem_window in batches(remaining_stems, input_window_size):
+            first_input_index = processed_inputs + 1
+            last_input_index = processed_inputs + len(stem_window)
+            jobs = build_candidate_jobs(
+                phase_two,
+                stem_window,
+                first_input_index,
+                args.seeds_per_config,
+                green_lower,
+                green_upper,
+            )
 
-                generated = []
-                for entry_batch in batches(entries, args.generation_batch_size):
-                    generated.extend(
-                        phase_two.ensure_generated_batch(
-                            [entry[1] for entry in entry_batch],
-                            [entry[3] for entry in entry_batch],
-                            steps=config.denoising_steps,
-                            spatial_strength=config.controlnet_strength,
-                        )
-                    )
-                image_paths = [result[0] for result in generated]
-                geojson_paths = []
-                indexed = list(range(len(entries)))
-                for index_batch in batches(indexed, args.cellvit_batch_size):
-                    geojson_paths.extend(
-                        phase_two.ensure_cellvit_batch(
-                            [image_paths[index] for index in index_batch],
-                            [entries[index][3] for index in index_batch],
-                        )
-                    )
-
-                for entry, generated_result, geojson_path in zip(
-                    entries, generated, geojson_paths
+            # PathOGen accepts varying morphology and spatial maps in one batch,
+            # but steps/ControlNet strength are scalar call arguments. Group only
+            # by those settings, then batch candidates from multiple source cases.
+            generation_groups: dict[tuple[int, float], list[CandidateJob]] = {}
+            for job in jobs:
+                key = (job.config.denoising_steps, job.config.controlnet_strength)
+                generation_groups.setdefault(key, []).append(job)
+            for (steps, strength), generation_jobs in generation_groups.items():
+                for job_batch in batches(
+                    generation_jobs, args.generation_batch_size
                 ):
-                    seed_index, context, green_details, _ = entry
-                    image_path, generation_metadata = generated_result
-                    predicted_cells = load_cells(geojson_path)
+                    generated = phase_two.ensure_generated_batch(
+                        [job.context for job in job_batch],
+                        [job.artifact_name for job in job_batch],
+                        steps=steps,
+                        spatial_strength=strength,
+                    )
+                    for job, result in zip(job_batch, generated):
+                        job.generated_result = result
+
+            for job_batch in batches(jobs, args.cellvit_batch_size):
+                if any(job.generated_result is None for job in job_batch):
+                    raise RuntimeError("Internal error: candidate generation is incomplete")
+                geojson_paths = phase_two.ensure_cellvit_batch(
+                    [job.generated_result[0] for job in job_batch],  # type: ignore[index]
+                    [job.artifact_name for job in job_batch],
+                )
+                for job, geojson_path in zip(job_batch, geojson_paths):
+                    job.cellvit_geojson = geojson_path
+
+            print(
+                f"[rerank batch {first_input_index}-{last_input_index}/{len(stems)}] "
+                f"generated and segmented {len(jobs)} candidates",
+                flush=True,
+            )
+
+            for stem in stem_window:
+                processed_inputs += 1
+                source_cells = load_cells(
+                    phase_two.catalog.sample(stem).geojson_path
+                )
+                candidate_rows = []
+                for job in (candidate for candidate in jobs if candidate.stem == stem):
+                    if job.generated_result is None or job.cellvit_geojson is None:
+                        raise RuntimeError("Internal error: candidate inference is incomplete")
+                    image_path, generation_metadata = job.generated_result
+                    predicted_cells = load_cells(job.cellvit_geojson)
                     score = score_spatial_cells(
                         source_cells, predicted_cells, args.match_radius
                     )
                     row = {
                         "stem": stem,
-                        "candidate_order": candidate_order,
-                        "seed_index": seed_index,
-                        "seed": context.seed,
-                        **asdict(config),
-                        **green_details,
+                        "candidate_order": job.candidate_order,
+                        "seed_index": job.seed_index,
+                        "seed": job.context.seed,
+                        **asdict(job.config),
+                        **job.green_details,
                         **score,
                         "generated_image": str(image_path),
-                        "cellvit_geojson": str(geojson_path),
+                        "cellvit_geojson": str(job.cellvit_geojson),
                         "generation_seconds": generation_metadata.get(
                             "seconds", np.nan
                         ),
                     }
-                    candidate_order += 1
                     candidate_rows.append(row)
                     all_rows.append(row)
+
+                best = max(
+                    candidate_rows, key=lambda row: float(row["spatial_score"])
+                )
+                selected_path = selected_dir / f"{stem}.png"
+                copy_image(Path(best["generated_image"]), selected_path, True)
+                selections.append(
+                    {
+                        "stem": stem,
+                        "selected_image": str(selected_path),
+                        **best,
+                    }
+                )
+                if (
+                    processed_inputs % args.save_every == 0
+                    or processed_inputs == len(stems)
+                ):
+                    pd.DataFrame(all_rows).to_csv(
+                        experiment_dir / "candidate_scores.csv", index=False
+                    )
+                    pd.DataFrame(selections).to_csv(
+                        experiment_dir / "selected_candidates.csv", index=False
+                    )
                 print(
-                    f"[rerank {input_index}/{len(stems)} config "
-                    f"{config_index}/{len(DEFAULT_CONFIGS)}] {config.config_id}: "
-                    f"generated and segmented {len(entries)} candidates",
+                    f"[rerank {processed_inputs}/{len(stems)}] {stem}: "
+                    f"score={best['spatial_score']:.4f} {best['config_id']} "
+                    f"seed={best['seed_index']}",
                     flush=True,
                 )
-            best = max(candidate_rows, key=lambda row: float(row["spatial_score"]))
-            selected_path = selected_dir / f"{stem}.png"
-            copy_image(Path(best["generated_image"]), selected_path, True)
-            selections.append(
-                {
-                    "stem": stem,
-                    "selected_image": str(selected_path),
-                    **best,
-                }
-            )
-            if input_index % args.save_every == 0 or input_index == len(stems):
-                pd.DataFrame(all_rows).to_csv(
-                    experiment_dir / "candidate_scores.csv", index=False
-                )
-                pd.DataFrame(selections).to_csv(
-                    experiment_dir / "selected_candidates.csv", index=False
-                )
-            print(
-                f"[rerank {input_index}/{len(stems)}] {stem}: "
-                f"score={best['spatial_score']:.4f} {best['config_id']} "
-                f"seed={best['seed_index']}",
-                flush=True,
-            )
     finally:
         phase_two.close()
 
