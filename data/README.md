@@ -9,7 +9,6 @@ data/
 ├── spatial_maps/                            # five-channel NPZ controls
 ├── morphology_stats.parquet                 # 16-feature control table
 ├── morphology/                              # scaler, raw table, and manifest
-├── embeddings_data/                          # optional graph/split data
 └── evaluations/<run-name>/                   # all generated/evaluation outputs
 ```
 
