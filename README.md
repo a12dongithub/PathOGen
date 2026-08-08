@@ -15,10 +15,11 @@ Five workflows are active:
 | `03_train_phase1` | Adapt the four-channel diffusion UNet to H&E tiles | Implemented; data validation and a real MPS forward pass tested |
 | `04_train_phase2` | Train spatial-concat and morphology-FiLM conditioning | Implemented; data validation and a real MPS forward pass tested |
 | `05_generate_counterfactuals` | Apply Python interventions in memory and generate matched baseline/counterfactual images | Implemented and tested on Apple MPS |
+| `06_evaluate_phase2_fid_kid` | Generate held-out Phase-2 tiles and calculate FID/KID against real sources | Implemented |
+| `07_rank_control_consistency` | Re-annotate generated/baseline tiles and rank control agreement | Implemented |
 
-Workflows 06–08 and their unimplemented modules were removed. The original
-training scripts remain archived as provenance; workflows 03 and 04 are clean
-implementations of their supported contracts.
+The original training scripts remain archived as provenance; workflows 03 and
+04 are clean implementations of their supported contracts.
 
 ```text
 prepared H&E tiles
@@ -64,7 +65,9 @@ refactored/
 │   ├── 02_build_conditions/
 │   ├── 03_train_phase1/
 │   ├── 04_train_phase2/
-│   └── 05_generate_counterfactuals/
+│   ├── 05_generate_counterfactuals/
+│   ├── 06_evaluate_phase2_fid_kid/
+│   └── 07_rank_control_consistency/
 ├── experiments/                 # active Workflow 05 intervention plugins
 ├── configs/                     # active data/model/experiment contracts
 ├── data/                        # six aligned TCGA tiles, GeoJSON, and conditions
@@ -96,6 +99,8 @@ READMEs:
 - [Workflow 03](workflows/03_train_phase1/README.md)
 - [Workflow 04](workflows/04_train_phase2/README.md)
 - [Workflow 05](workflows/05_generate_counterfactuals/README.md)
+- [Workflow 06](workflows/06_evaluate_phase2_fid_kid/README.md)
+- [Workflow 07](workflows/07_rank_control_consistency/README.md)
 
 ## Models and local fixture
 
