@@ -209,7 +209,8 @@ Normal evaluation uses independent device-seeded latent noise per tile, exactly
 as the historical validation sampler did. Workflow 05 is the explicit
 exception: baseline and counterfactual conditions share one cloned latent so
 their difference is not sampling noise. The reference inference protocol uses
-20 DDIM steps and supports CUDA, Apple MPS, and CPU execution.
+30 DDIM steps with spatial-control strength 2.0, and supports CUDA, Apple MPS,
+and CPU execution.
 
 ## Validation and evaluation
 

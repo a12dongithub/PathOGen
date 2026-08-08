@@ -65,6 +65,8 @@ def test_workflow06_writes_matched_pairs_manifest_and_legacy_grid(tmp_path, monk
     module.main()
 
     manifest = json.loads((output / "manifest.json").read_text())
+    assert manifest["steps"] == 30
+    assert manifest["spatial_strength"] == 2.0
     assert len(manifest["records"]) == 2
     assert len(list((output / "generated").glob("*.png"))) == 2
     assert len(list((output / "real").glob("*.png"))) == 2

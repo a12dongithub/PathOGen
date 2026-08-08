@@ -69,10 +69,16 @@ def generate_matched_conditions(
     *,
     seed: int,
     prompt: str = "he",
-    num_inference_steps: int = 20,
+    num_inference_steps: int = 30,
+    spatial_strength: float = 2.0,
     matched_noise: bool = False,
 ) -> list[Image.Image]:
-    """Generate conditions with independent or deliberately matched initial noise."""
+    """Generate conditions with independent or deliberately matched initial noise.
+
+    ``spatial_strength`` scales the encoded five-channel spatial control before
+    it is concatenated with the diffusion latents.  The Phase-2 evaluation
+    default is 2.0, matching the validated fidelity experiment configuration.
+    """
     if not conditions:
         return []
     for condition in conditions:
@@ -101,7 +107,7 @@ def generate_matched_conditions(
     morphology = torch.stack([item.morphology for item in conditions]).to(
         device=models.device, dtype=models.dtype
     )
-    spatial_features = models.spatial_encoder(spatial)
+    spatial_features = models.spatial_encoder(spatial) * float(spatial_strength)
     latents = _initial_latents(
         models, batch_size, seed, matched_noise=matched_noise
     ) * scheduler.init_noise_sigma

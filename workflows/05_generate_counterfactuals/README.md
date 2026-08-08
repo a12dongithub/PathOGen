@@ -86,7 +86,7 @@ Then generate all matched pairs on a CUDA machine:
 python workflows/05_generate_counterfactuals/run.py \
   --experiment experiments.spatial.relabel_all_cells \
   --intervention all_cells_inflammatory \
-  --all-tiles --seed 42 --steps 20 --batch-size 1 \
+  --all-tiles --seed 42 --steps 30 --spatial-strength 2 --batch-size 1 \
   --device cuda --dtype float16 --local-files-only \
   --output-dir data/evaluations/tcga_test_relabel_inflammatory_seed42
 ```

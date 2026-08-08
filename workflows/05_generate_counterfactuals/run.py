@@ -73,7 +73,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--sample-seed", type=int, default=42)
     parser.add_argument("--seed", type=int, action="append", dest="seeds")
     parser.add_argument("--intervention-seed", type=int, default=42)
-    parser.add_argument("--steps", type=int, default=20)
+    parser.add_argument("--steps", type=int, default=30)
+    parser.add_argument("--spatial-strength", type=float, default=2.0)
     parser.add_argument("--prompt", default="he")
     parser.add_argument(
         "--batch-size",
@@ -102,6 +103,8 @@ def parse_args() -> argparse.Namespace:
         parser.error("--all-tiles cannot be combined with --stem")
     if args.steps < 1:
         parser.error("--steps must be at least 1")
+    if args.spatial_strength < 0:
+        parser.error("--spatial-strength must be non-negative")
     if args.batch_size < 1:
         parser.error("--batch-size must be at least 1")
     return args
@@ -255,6 +258,7 @@ def main() -> None:
             "seeds": seeds,
             "intervention_seed": args.intervention_seed,
             "num_inference_steps": args.steps,
+            "spatial_strength": args.spatial_strength,
             "batch_size": args.batch_size,
             "requested_device": args.device,
             "requested_dtype": args.dtype,
@@ -336,6 +340,7 @@ def main() -> None:
                 seed=seed,
                 prompt=args.prompt,
                 num_inference_steps=args.steps,
+                spatial_strength=args.spatial_strength,
                 matched_noise=True,
             )
             first_images[0].save(baseline_path)
@@ -349,6 +354,7 @@ def main() -> None:
                     seed=seed,
                     prompt=args.prompt,
                     num_inference_steps=args.steps,
+                    spatial_strength=args.spatial_strength,
                     matched_noise=True,
                 )
                 generated_groups.append((group, images))

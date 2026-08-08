@@ -36,7 +36,8 @@ def _args() -> argparse.Namespace:
     p.add_argument("--all-tiles", action="store_true")
     p.add_argument("--sample-seed", type=int, default=42)
     p.add_argument("--seed", type=int, default=42)
-    p.add_argument("--steps", type=int, default=20)
+    p.add_argument("--steps", type=int, default=30)
+    p.add_argument("--spatial-strength", type=float, default=2.0)
     p.add_argument("--batch-size", type=int, default=1)
     p.add_argument("--prompt", default="he")
     p.add_argument("--device", choices=("auto", "cpu", "cuda", "mps"), default="auto")
@@ -47,7 +48,12 @@ def _args() -> argparse.Namespace:
     p.add_argument("--skip-metrics", action="store_true")
     p.add_argument("--num-grids", type=int, default=200)
     p.add_argument("--overwrite", action="store_true")
-    return p.parse_args()
+    args = p.parse_args()
+    if args.steps < 1:
+        p.error("--steps must be at least 1")
+    if args.spatial_strength < 0:
+        p.error("--spatial-strength must be non-negative")
+    return args
 
 
 def _select(args: argparse.Namespace, stems: tuple[str, ...]) -> list[str]:
@@ -153,6 +159,7 @@ def main() -> None:
             seed=args.seed + start,
             prompt=args.prompt,
             num_inference_steps=args.steps,
+            spatial_strength=args.spatial_strength,
             matched_noise=False,
         )
         for offset, (stem, image) in enumerate(zip(batch_stems, images, strict=True)):
@@ -188,6 +195,7 @@ def main() -> None:
         "seed": args.seed,
         "sample_seed": args.sample_seed,
         "steps": args.steps,
+        "spatial_strength": args.spatial_strength,
         "matched_initial_noise": False,
         "num_grids": args.num_grids,
         "records": records,
