@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 import torch
+from PIL import Image
 
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "src"))
@@ -19,6 +20,7 @@ sys.path.insert(0, str(REPO / "src"))
 from cpathogen.counterfactuals import ConditionStore
 from cpathogen.generation.checkpoints import load_phase2_generation_models
 from cpathogen.generation.counterfactuals import generate_matched_conditions
+from cpathogen.generation.visualization import comparison_grid
 
 
 def _args() -> argparse.Namespace:
@@ -43,6 +45,7 @@ def _args() -> argparse.Namespace:
     p.add_argument("--revision")
     p.add_argument("--local-files-only", action="store_true")
     p.add_argument("--skip-metrics", action="store_true")
+    p.add_argument("--num-grids", type=int, default=200)
     p.add_argument("--overwrite", action="store_true")
     return p.parse_args()
 
@@ -82,10 +85,13 @@ def _metrics(records: list[dict[str, Any]], output: Path) -> None:
         batch = records[start : start + 32]
         real = torch.stack([transform(Image.open(item["real_path"]).convert("RGB")) for item in batch])
         generated = torch.stack([transform(Image.open(item["generated_path"]).convert("RGB")) for item in batch])
-        fid.update((real * 255).to(torch.uint8).to(device), real=True)
-        fid.update((generated * 255).to(torch.uint8).to(device), real=False)
-        kid.update((real * 255).to(torch.uint8).to(device), real=True)
-        kid.update((generated * 255).to(torch.uint8).to(device), real=False)
+        # TorchMetrics' ``normalize=True`` expects float RGB tensors in [0, 1]
+        # and performs its own conversion to uint8.  This is also what the
+        # historical evaluator supplied to FID.
+        fid.update(real.to(device), real=True)
+        fid.update(generated.to(device), real=False)
+        kid.update(real.to(device), real=True)
+        kid.update(generated.to(device), real=False)
     kid_mean, kid_std = kid.compute()
     result = {
         "count": len(records),
@@ -114,8 +120,13 @@ def main() -> None:
     out.mkdir(parents=True, exist_ok=True)
     generated = out / "generated"
     real = out / "real"
+    grids = out / "grids"
     generated.mkdir(exist_ok=True)
     real.mkdir(exist_ok=True)
+    if args.num_grids < 0:
+        raise ValueError("--num-grids must be non-negative")
+    if args.num_grids:
+        grids.mkdir(exist_ok=True)
 
     store = ConditionStore(
         args.data_root,
@@ -142,6 +153,7 @@ def main() -> None:
             seed=args.seed + start,
             prompt=args.prompt,
             num_inference_steps=args.steps,
+            matched_noise=False,
         )
         for offset, (stem, image) in enumerate(zip(batch_stems, images, strict=True)):
             index = start + offset
@@ -152,6 +164,12 @@ def main() -> None:
             if not source.is_file():
                 raise FileNotFoundError(f"Real source tile not found: {source}")
             shutil.copy2(source, real_path)
+            if index < args.num_grids:
+                spatial_map = conditions[offset].spatial.permute(1, 2, 0).cpu().numpy()
+                with Image.open(source) as source_image:
+                    comparison_grid(
+                        spatial_map, source_image, image, args.checkpoint.name
+                    ).save(grids / f"{index:06d}_{stem}.png")
             records.append({
                 "index": index,
                 "stem": stem,
@@ -170,6 +188,8 @@ def main() -> None:
         "seed": args.seed,
         "sample_seed": args.sample_seed,
         "steps": args.steps,
+        "matched_initial_noise": False,
+        "num_grids": args.num_grids,
         "records": records,
     })
     if not args.skip_metrics:

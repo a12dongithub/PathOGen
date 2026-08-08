@@ -30,23 +30,29 @@ def _ddim_scheduler(models: Phase2GenerationModels) -> DDIMScheduler:
 
 
 def _initial_latents(
-    models: Phase2GenerationModels, batch_size: int, seed: int
+    models: Phase2GenerationModels, batch_size: int, seed: int, *, matched_noise: bool
 ) -> torch.Tensor:
-    # Generate once on CPU, then clone across conditions. This provides matched
-    # noise even when CUDA/MPS random-number implementations differ.
-    generator = torch.Generator(device="cpu").manual_seed(seed)
+    """Create legacy-compatible latent noise, optionally shared by a pair.
+
+    ``main:validation_utils.generate_concat_conditioned`` seeded a generator on
+    the active CUDA device and sampled one independent latent per tile.  That
+    is the normal Workflow 06 evaluation mode.  Counterfactual comparison is
+    the deliberate exception: Workflow 05 expands one initial latent across a
+    baseline and every intervention so observed differences are conditional,
+    not sampling-noise differences.
+    """
+    generator_device = models.device if models.device.type == "cuda" else "cpu"
+    generator = torch.Generator(device=generator_device).manual_seed(seed)
     sample_size = models.unet.config.sample_size
     if isinstance(sample_size, int):
         height = width = sample_size
     else:
         height, width = sample_size
     channels = int(models.unet.config.out_channels)
-    latent = torch.randn(
-        (1, channels, height, width), generator=generator, dtype=torch.float32
-    )
-    return latent.expand(batch_size, -1, -1, -1).clone().to(
-        device=models.device, dtype=models.dtype
-    )
+    shape = (1 if matched_noise else batch_size, channels, height, width)
+    latent = torch.randn(shape, generator=generator, device=generator_device, dtype=models.dtype)
+    latent = latent.to(device=models.device, dtype=models.dtype)
+    return latent.expand(batch_size, -1, -1, -1).clone() if matched_noise else latent
 
 
 def _to_pil(decoded: torch.Tensor) -> list[Image.Image]:
@@ -64,8 +70,9 @@ def generate_matched_conditions(
     seed: int,
     prompt: str = "he",
     num_inference_steps: int = 20,
+    matched_noise: bool = False,
 ) -> list[Image.Image]:
-    """Generate conditions from the exact same initial latent noise tensor."""
+    """Generate conditions with independent or deliberately matched initial noise."""
     if not conditions:
         return []
     for condition in conditions:
@@ -95,7 +102,9 @@ def generate_matched_conditions(
         device=models.device, dtype=models.dtype
     )
     spatial_features = models.spatial_encoder(spatial)
-    latents = _initial_latents(models, batch_size, seed) * scheduler.init_noise_sigma
+    latents = _initial_latents(
+        models, batch_size, seed, matched_noise=matched_noise
+    ) * scheduler.init_noise_sigma
 
     with film_condition(models.unet, morphology):
         for timestep in scheduler.timesteps:
@@ -112,5 +121,8 @@ def generate_matched_conditions(
             )[0]
 
     scaling_factor = float(models.vae.config.scaling_factor)
-    decoded = models.vae.decode(latents / scaling_factor, return_dict=False)[0]
+    # The original validation routine deliberately decoded in float32.
+    decoded = models.vae.decode(
+        (latents / scaling_factor).float(), return_dict=False
+    )[0]
     return _to_pil(decoded)

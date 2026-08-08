@@ -205,9 +205,11 @@ manifest. It:
 6. At every denoising step, concatenate noisy and spatial latents into an eight-channel UNet input.
 7. Decode final latents with the VAE and convert to RGB PIL images.
 
-Every condition in a comparison starts from a clone of the same CPU-generated
-latent tensor, including across generation chunks. The reference inference
-protocol uses 20 DDIM steps and supports CUDA, Apple MPS, and CPU execution.
+Normal evaluation uses independent device-seeded latent noise per tile, exactly
+as the historical validation sampler did. Workflow 05 is the explicit
+exception: baseline and counterfactual conditions share one cloned latent so
+their difference is not sampling noise. The reference inference protocol uses
+20 DDIM steps and supports CUDA, Apple MPS, and CPU execution.
 
 ## Validation and evaluation
 

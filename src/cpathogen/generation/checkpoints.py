@@ -257,13 +257,16 @@ def load_phase2_generation_models(
     )
     vae = AutoencoderKL.from_pretrained(
         vae_dir,
-        torch_dtype=conditioning.dtype,
+        # This matches the original Phase-2 validation sampler.  The UNet and
+        # conditioning modules run at the requested inference dtype, but the
+        # frozen VAE decodes float32 latents/weights.
+        torch_dtype=torch.float32,
         local_files_only=True,
         use_safetensors=True,
     )
 
     text_encoder.to(device=conditioning.device, dtype=conditioning.dtype).eval()
-    vae.to(device=conditioning.device, dtype=conditioning.dtype).eval()
+    vae.to(device=conditioning.device, dtype=torch.float32).eval()
     text_encoder.requires_grad_(False)
     vae.requires_grad_(False)
     return Phase2GenerationModels(

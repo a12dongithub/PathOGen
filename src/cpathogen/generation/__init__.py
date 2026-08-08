@@ -1,5 +1,4 @@
-"""H&E diffusion training, conditioning, and inference."""
-"""PathOGen training and inference components."""
+"""Checkpoint-faithful Phase-2 conditioning and inference components."""
 
 from .counterfactuals import generate_matched_conditions
 

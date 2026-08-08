@@ -12,21 +12,18 @@ Five workflows are active:
 |---|---|---|
 | `01_annotate_nuclei` | Run CellViT++ on source tiles or generated matched pairs and write nucleus GeoJSON | Implemented and tested on Apple MPS |
 | `02_build_conditions` | Build five spatial maps, 16 morphology/stain values, scaler, and metadata | Implemented and tested on the six-tile fixture |
-| `03_train_phase1` | Adapt the four-channel diffusion UNet to H&E tiles | Implemented; data validation and a real MPS forward pass tested |
-| `04_train_phase2` | Train spatial-concat and morphology-FiLM conditioning | Implemented; data validation and a real MPS forward pass tested |
 | `05_generate_counterfactuals` | Apply Python interventions in memory and generate matched baseline/counterfactual images | Implemented and tested on Apple MPS |
 | `06_evaluate_phase2_fid_kid` | Generate held-out Phase-2 tiles and calculate FID/KID against real sources | Implemented |
 | `07_rank_control_consistency` | Re-annotate generated/baseline tiles and rank control agreement | Implemented |
 
-The original training scripts remain archived as provenance; workflows 03 and
-04 are clean implementations of their supported contracts.
+Training is intentionally out of scope for this repository revision. The
+historical scripts remain in the main branch/archive as provenance; active
+workflows consume frozen checkpoints only.
 
 ```text
 prepared H&E tiles
     → 01 CellViT++ nucleus GeoJSON
     → 02 spatial + morphology/stain conditions
-    → 03 H&E domain adaptation
-    → 04 structured-conditioning training
     → 05 matched counterfactual generation
     → 01 repeat CellViT++ annotation on generated images
 ```
@@ -58,13 +55,10 @@ refactored/
 │   ├── counterfactuals/         # Workflow 05 condition/intervention contracts
 │   ├── generation/              # Workflow 05 checkpoint loading and sampling
 │   │   └── conditioning/        # spatial encoder and FiLM compatibility
-│   ├── training/                # Workflows 03/04 datasets and trainers
 │   └── utils/paths.py           # shared repository-relative paths
 ├── workflows/
 │   ├── 01_annotate_nuclei/
 │   ├── 02_build_conditions/
-│   ├── 03_train_phase1/
-│   ├── 04_train_phase2/
 │   ├── 05_generate_counterfactuals/
 │   ├── 06_evaluate_phase2_fid_kid/
 │   └── 07_rank_control_consistency/
@@ -73,7 +67,7 @@ refactored/
 ├── data/                        # six aligned TCGA tiles, GeoJSON, and conditions
 ├── artifacts/
 │   ├── models/                  # CellViT++, Phase-1, and Phase-2 checkpoints
-│   └── runs/                    # new training/generation outputs
+│   └── runs/                    # generation/evaluation outputs
 ├── tests/                       # active unit and checkpoint integration checks
 ├── third_party/cellvit_plus_plus/
 ├── docs/                        # four project documents plus report assets
@@ -87,7 +81,6 @@ Use separate optional dependency groups:
 ```bash
 pip install -e ".[annotation]"      # Workflow 01
 pip install -e ".[preprocessing]"   # Workflow 02
-pip install -e ".[training]"        # Workflows 03 and 04
 pip install -e ".[inference]"       # Workflow 05
 ```
 
@@ -96,8 +89,6 @@ READMEs:
 
 - [Workflow 01](workflows/01_annotate_nuclei/README.md)
 - [Workflow 02](workflows/02_build_conditions/README.md)
-- [Workflow 03](workflows/03_train_phase1/README.md)
-- [Workflow 04](workflows/04_train_phase2/README.md)
 - [Workflow 05](workflows/05_generate_counterfactuals/README.md)
 - [Workflow 06](workflows/06_evaluate_phase2_fid_kid/README.md)
 - [Workflow 07](workflows/07_rank_control_consistency/README.md)
@@ -115,8 +106,8 @@ data/interim/annotations/tcga_brca/geojson/
 data/processed/conditions/
 ```
 
-The included six-tile fixture is for integration checks, including training
-forward passes. It is not a training or scientific validation cohort. Large
+The included six-tile fixture is for integration checks. It is not a
+scientific validation cohort. Large
 model files are ignored by ordinary Git and require an approved model registry
 or Git LFS for distribution.
 

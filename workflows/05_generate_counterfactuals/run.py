@@ -336,6 +336,7 @@ def main() -> None:
                 seed=seed,
                 prompt=args.prompt,
                 num_inference_steps=args.steps,
+                matched_noise=True,
             )
             first_images[0].save(baseline_path)
             generated_groups = [(first_items, first_images[1:])]
@@ -348,6 +349,7 @@ def main() -> None:
                     seed=seed,
                     prompt=args.prompt,
                     num_inference_steps=args.steps,
+                    matched_noise=True,
                 )
                 generated_groups.append((group, images))
 
