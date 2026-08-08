@@ -5,6 +5,11 @@ copies the matching real source tiles into the same run directory. It writes a
 stem-level `manifest.json`, `generated/`, `real/`, and the first 200 legacy
 three-panel spatial-map/real/generated grids by default.
 
+Pass `--candidates-per-tile N` to generate deterministic seed-only variants
+with unchanged controls. For `N > 1`, the workflow reports one FID/KID result
+per candidate index plus their mean; it never duplicates real tiles in a
+pooled metric set. Workflow 07 then selects one candidate per source tile.
+
 Use `--all-tiles` for a complete aligned set or `--num-tiles 100 --sample-seed 42`
 for a reproducible pilot. FID/KID computation should use the manifest and the
 same image preprocessing for both directories; it is intentionally separate

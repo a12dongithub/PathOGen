@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -33,13 +34,17 @@ def _args() -> argparse.Namespace:
     return p.parse_args()
 
 
-def _run_annotation(image_dir: Path, output_dir: Path, args: argparse.Namespace) -> None:
+def _run_annotation(
+    image_dir: Path, output_dir: Path, args: argparse.Namespace, *, allow_empty: bool
+) -> None:
     command = [
         sys.executable, str(REPO / "workflows/01_annotate_nuclei/run.py"),
         "--input-dir", str(image_dir), "--output-dir", str(output_dir),
         "--model", str(args.annotation_model), "--cellvit-root", str(args.cellvit_root),
         "--device", args.device, "--dtype", args.dtype, "--overwrite",
     ]
+    if allow_empty:
+        command.append("--allow-empty")
     subprocess.run(command, cwd=REPO, check=True)
 
 
@@ -50,7 +55,14 @@ def _map(path: Path) -> np.ndarray:
     return value / 255.0 if value.max(initial=0) > 1 else value
 
 
-def _build_conditions(image_dir: Path, geojson_dir: Path, output_dir: Path, n_jobs: int) -> pd.DataFrame:
+def _build_conditions(
+    image_dir: Path,
+    geojson_dir: Path,
+    output_dir: Path,
+    n_jobs: int,
+    *,
+    allow_empty: bool,
+) -> pd.DataFrame:
     build_spatial_maps(geojson_dir, output_dir / "spatial_maps", n_jobs=n_jobs, overwrite=True)
     return build_morphology_features(
         image_dir, geojson_dir,
@@ -59,6 +71,7 @@ def _build_conditions(image_dir: Path, geojson_dir: Path, output_dir: Path, n_jo
         output_dir / "morphology/scaler.joblib",
         output_dir / "morphology/feature_manifest.json",
         n_jobs=n_jobs,
+        allow_empty=allow_empty,
     )
 
 
@@ -73,11 +86,17 @@ def main() -> None:
     source_geojson = annotations / "baseline"
     generated_geojson = annotations / "generated"
     if not args.skip_annotation:
-        _run_annotation(real, source_geojson, args)
-        _run_annotation(generated, generated_geojson, args)
+        _run_annotation(real, source_geojson, args, allow_empty=False)
+        # A seed candidate with no detected cells is meaningful evidence of
+        # poor control fidelity; retain it for ranking instead of aborting.
+        _run_annotation(generated, generated_geojson, args, allow_empty=True)
     conditions = run / "control_consistency" / "conditions"
-    source_features = _build_conditions(real, source_geojson, conditions / "baseline", args.n_jobs)
-    generated_features = _build_conditions(generated, generated_geojson, conditions / "generated", args.n_jobs)
+    source_features = _build_conditions(
+        real, source_geojson, conditions / "baseline", args.n_jobs, allow_empty=False
+    )
+    generated_features = _build_conditions(
+        generated, generated_geojson, conditions / "generated", args.n_jobs, allow_empty=True
+    )
     scaler = StandardScaler().fit(source_features.to_numpy())
     dump(scaler, conditions / "baseline_scaler.joblib")
     source_std = pd.DataFrame(scaler.transform(source_features), index=source_features.index, columns=source_features.columns)
@@ -85,14 +104,22 @@ def main() -> None:
 
     rows = []
     for record in records:
-        stem = Path(record["generated_path"]).stem
-        source_map = _map(conditions / "baseline/spatial_maps" / f"{stem}.npz")
-        generated_map = _map(conditions / "generated/spatial_maps" / f"{stem}.npz")
-        morph_delta = generated_std.loc[stem].to_numpy() - source_std.loc[stem].to_numpy()
+        generated_id = record.get("generated_id", Path(record["generated_path"]).stem)
+        source_stem = record.get("source_stem", Path(record["real_path"]).stem)
+        source_map = _map(conditions / "baseline/spatial_maps" / f"{source_stem}.npz")
+        generated_map = _map(conditions / "generated/spatial_maps" / f"{generated_id}.npz")
+        morph_delta = generated_std.loc[generated_id].to_numpy() - source_std.loc[source_stem].to_numpy()
         spatial_rmse = float(np.sqrt(np.mean((generated_map - source_map) ** 2)))
-        morphology_mae = float(np.mean(np.abs(morph_delta)))
+        morphology_mae = (
+            float(np.mean(np.abs(morph_delta)))
+            if np.isfinite(morph_delta).all()
+            else float("inf")
+        )
         rows.append({
             "index": record["index"], "stem": record["stem"],
+            "source_stem": source_stem,
+            "candidate_index": record.get("candidate_index", 0),
+            "generation_seed": record.get("generation_seed"),
             "generated_path": record["generated_path"], "real_path": record["real_path"],
             "spatial_rmse": spatial_rmse, "morphology_mae_standardized": morphology_mae,
         })
@@ -102,13 +129,29 @@ def main() -> None:
     ) / 2.0
     ranking = ranking.sort_values(["control_score", "index"]).reset_index(drop=True)
     ranking.to_csv(run / "control_consistency/ranking.csv", index=False)
+    selected = (
+        ranking.sort_values(["source_stem", "control_score", "candidate_index", "index"])
+        .groupby("source_stem", as_index=False, sort=False)
+        .first()
+        .sort_values("source_stem")
+        .reset_index(drop=True)
+    )
+    selected_dir = run / "control_consistency" / "selected"
+    selected_dir.mkdir(parents=True, exist_ok=True)
+    for item in selected.to_dict("records"):
+        shutil.copy2(item["generated_path"], selected_dir / f"{item['source_stem']}.png")
+    selected.to_csv(run / "control_consistency" / "selected_candidates.csv", index=False)
+    (run / "control_consistency" / "selected_manifest.json").write_text(
+        json.dumps({"count": len(selected), "selection": "lowest_control_score_per_source_tile", "records": selected.to_dict("records")}, indent=2) + "\n",
+        encoding="utf-8",
+    )
     for k in sorted(set(args.top_k)):
         selected = ranking.head(min(k, len(ranking)))
         (run / "control_consistency" / f"top_{k}_manifest.json").write_text(
             json.dumps({"count": len(selected), "selection": "lowest_control_score", "records": selected.to_dict("records")}, indent=2) + "\n",
             encoding="utf-8",
         )
-    print(f"Ranked {len(ranking)} tiles; best control score={ranking.control_score.iloc[0]:.6f}")
+    print(f"Ranked {len(ranking)} candidates and selected {len(selected)} tiles; best control score={ranking.control_score.iloc[0]:.6f}")
 
 
 if __name__ == "__main__":

@@ -32,3 +32,24 @@ def test_counterfactual_latents_share_one_seeded_sample() -> None:
         (1, 4, 2, 2), generator=torch.Generator(device="cpu").manual_seed(42)
     )
     torch.testing.assert_close(actual, expected.expand_as(actual))
+
+
+def test_per_condition_seeds_are_batch_size_independent() -> None:
+    models = _models()
+    seeds = [17, 29, 43]
+    actual = _initial_latents(
+        models,
+        batch_size=3,
+        seed=0,
+        matched_noise=False,
+        per_condition_seeds=seeds,
+    )
+    expected = torch.cat(
+        [
+            torch.randn(
+                (1, 4, 2, 2), generator=torch.Generator(device="cpu").manual_seed(seed)
+            )
+            for seed in seeds
+        ]
+    )
+    torch.testing.assert_close(actual, expected)

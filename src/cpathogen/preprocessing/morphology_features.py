@@ -13,6 +13,14 @@ from tqdm import tqdm
 from cpathogen.utils.paths import MORPHOLOGY_DIR, MORPHOLOGY_STATS, TCGA_GEOJSON, TCGA_TILES
 
 
+FEATURE_COLUMNS = (
+    "area_mean", "area_var", "eccentricity_mean", "eccentricity_var",
+    "solidity_mean", "solidity_var", "perimeter_mean", "perimeter_var",
+    "grad_mean", "grad_var", "r_mean", "r_var", "g_mean", "g_var",
+    "b_mean", "b_var",
+)
+
+
 def calculate_nuclei_features_single(img_path, geojson_path):
     """
     Computes aggregated features (Mean, Var) for all nuclei in a tile.
@@ -170,6 +178,7 @@ def build_morphology_features(
     manifest_output: str | Path,
     n_jobs: int = 8,
     stems: Iterable[str] | None = None,
+    allow_empty: bool = False,
 ) -> pd.DataFrame:
     """Compute, standardize, and persist the 16-value tile condition table."""
     image_dir = Path(image_dir)
@@ -213,14 +222,17 @@ def build_morphology_features(
     )
 
     failed_stems = sorted(stem for stem, result in results_list if result is None)
-    if failed_stems:
+    if failed_stems and not allow_empty:
         raise RuntimeError(
             f"Morphology extraction failed for {len(failed_stems)} tiles: "
             f"{failed_stems[:5]}"
         )
 
     valid_indices = [stem for stem, _ in results_list]
-    valid_data = [result for _, result in results_list]
+    valid_data = [
+        result if result is not None else {column: np.nan for column in FEATURE_COLUMNS}
+        for _, result in results_list
+    ]
     df = pd.DataFrame(valid_data, index=valid_indices).sort_index()
 
     raw_output = Path(raw_output)

@@ -30,7 +30,12 @@ def _ddim_scheduler(models: Phase2GenerationModels) -> DDIMScheduler:
 
 
 def _initial_latents(
-    models: Phase2GenerationModels, batch_size: int, seed: int, *, matched_noise: bool
+    models: Phase2GenerationModels,
+    batch_size: int,
+    seed: int,
+    *,
+    matched_noise: bool,
+    per_condition_seeds: Sequence[int] | None = None,
 ) -> torch.Tensor:
     """Create legacy-compatible latent noise, optionally shared by a pair.
 
@@ -42,15 +47,32 @@ def _initial_latents(
     not sampling-noise differences.
     """
     generator_device = models.device if models.device.type == "cuda" else "cpu"
-    generator = torch.Generator(device=generator_device).manual_seed(seed)
     sample_size = models.unet.config.sample_size
     if isinstance(sample_size, int):
         height = width = sample_size
     else:
         height, width = sample_size
     channels = int(models.unet.config.out_channels)
-    shape = (1 if matched_noise else batch_size, channels, height, width)
-    latent = torch.randn(shape, generator=generator, device=generator_device, dtype=models.dtype)
+    if per_condition_seeds is not None:
+        if matched_noise:
+            raise ValueError("Per-condition seeds cannot be used with matched noise")
+        if len(per_condition_seeds) != batch_size:
+            raise ValueError("Per-condition seed count must equal batch size")
+        latent = torch.cat(
+            [
+                torch.randn(
+                    (1, channels, height, width),
+                    generator=torch.Generator(device=generator_device).manual_seed(int(item)),
+                    device=generator_device,
+                    dtype=models.dtype,
+                )
+                for item in per_condition_seeds
+            ]
+        )
+    else:
+        generator = torch.Generator(device=generator_device).manual_seed(seed)
+        shape = (1 if matched_noise else batch_size, channels, height, width)
+        latent = torch.randn(shape, generator=generator, device=generator_device, dtype=models.dtype)
     latent = latent.to(device=models.device, dtype=models.dtype)
     return latent.expand(batch_size, -1, -1, -1).clone() if matched_noise else latent
 
@@ -72,6 +94,7 @@ def generate_matched_conditions(
     num_inference_steps: int = 30,
     spatial_strength: float = 2.0,
     matched_noise: bool = False,
+    per_condition_seeds: Sequence[int] | None = None,
 ) -> list[Image.Image]:
     """Generate conditions with independent or deliberately matched initial noise.
 
@@ -109,7 +132,11 @@ def generate_matched_conditions(
     )
     spatial_features = models.spatial_encoder(spatial) * float(spatial_strength)
     latents = _initial_latents(
-        models, batch_size, seed, matched_noise=matched_noise
+        models,
+        batch_size,
+        seed,
+        matched_noise=matched_noise,
+        per_condition_seeds=per_condition_seeds,
     ) * scheduler.init_noise_sigma
 
     with film_condition(models.unet, morphology):

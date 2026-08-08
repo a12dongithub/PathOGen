@@ -59,7 +59,8 @@ def test_workflow06_writes_matched_pairs_manifest_and_legacy_grid(tmp_path, monk
         [
             "run.py", "--data-root", str(data), "--images-dir", str(images),
             "--checkpoint", str(tmp_path / "checkpoint_30000"), "--output-dir", str(output),
-            "--num-tiles", "2", "--sample-seed", "42", "--skip-metrics", "--num-grids", "1",
+            "--num-tiles", "2", "--candidates-per-tile", "2", "--sample-seed", "42",
+            "--skip-metrics", "--num-grids", "1",
         ],
     )
     module.main()
@@ -67,7 +68,10 @@ def test_workflow06_writes_matched_pairs_manifest_and_legacy_grid(tmp_path, monk
     manifest = json.loads((output / "manifest.json").read_text())
     assert manifest["steps"] == 30
     assert manifest["spatial_strength"] == 2.0
-    assert len(manifest["records"]) == 2
-    assert len(list((output / "generated").glob("*.png"))) == 2
+    assert manifest["candidates_per_tile"] == 2
+    assert len(manifest["records"]) == 4
+    assert len(list((output / "generated").glob("*.png"))) == 4
     assert len(list((output / "real").glob("*.png"))) == 2
     assert len(list((output / "grids").glob("*.png"))) == 1
+    assert {record["candidate_index"] for record in manifest["records"]} == {0, 1}
+    assert len({record["generation_seed"] for record in manifest["records"]}) == 4

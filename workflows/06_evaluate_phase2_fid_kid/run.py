@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import random
 import shutil
@@ -36,6 +37,10 @@ def _args() -> argparse.Namespace:
     p.add_argument("--all-tiles", action="store_true")
     p.add_argument("--sample-seed", type=int, default=42)
     p.add_argument("--seed", type=int, default=42)
+    p.add_argument(
+        "--candidates-per-tile", type=int, default=1,
+        help="Independent deterministic noise samples generated for each source tile.",
+    )
     p.add_argument("--steps", type=int, default=30)
     p.add_argument("--spatial-strength", type=float, default=2.0)
     p.add_argument("--batch-size", type=int, default=1)
@@ -53,6 +58,8 @@ def _args() -> argparse.Namespace:
         p.error("--steps must be at least 1")
     if args.spatial_strength < 0:
         p.error("--spatial-strength must be non-negative")
+    if args.candidates_per_tile < 1:
+        p.error("--candidates-per-tile must be at least 1")
     return args
 
 
@@ -73,7 +80,7 @@ def _write_json(path: Path, payload: Any) -> None:
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
-def _metrics(records: list[dict[str, Any]], output: Path) -> None:
+def _metrics(records: list[dict[str, Any]]) -> dict[str, Any]:
     """Calculate torchmetrics FID/KID without coupling model loading to metrics."""
     from PIL import Image
     from torchvision.transforms import Compose, Resize, ToTensor
@@ -106,8 +113,12 @@ def _metrics(records: list[dict[str, Any]], output: Path) -> None:
         "kid_mean": float(kid_mean.item()),
         "kid_std": float(kid_std.item()),
     }
-    _write_json(output / "fid_kid.json", result)
-    print(json.dumps(result, indent=2), flush=True)
+    return result
+
+
+def _candidate_seed(base_seed: int, stem: str, candidate_index: int) -> int:
+    payload = f"{base_seed}|{stem}|candidate|{candidate_index}".encode("utf-8")
+    return int.from_bytes(hashlib.sha256(payload).digest()[:8], "big") & 0x7FFFFFFF
 
 
 def main() -> None:
@@ -149,44 +160,58 @@ def main() -> None:
         dtype=args.dtype,
         local_files_only=args.local_files_only,
     )
+    jobs = [
+        (source_index, stem, candidate_index, _candidate_seed(args.seed, stem, candidate_index))
+        for source_index, stem in enumerate(selected)
+        for candidate_index in range(args.candidates_per_tile)
+    ]
     records: list[dict[str, Any]] = []
-    for start in range(0, len(selected), args.batch_size):
-        batch_stems = selected[start : start + args.batch_size]
-        conditions = [store.load(stem) for stem in batch_stems]
+    for start in range(0, len(jobs), args.batch_size):
+        batch_jobs = jobs[start : start + args.batch_size]
+        conditions = [store.load(stem) for _, stem, _, _ in batch_jobs]
         images = generate_matched_conditions(
             models,
             conditions,
-            seed=args.seed + start,
+            seed=args.seed,
             prompt=args.prompt,
             num_inference_steps=args.steps,
             spatial_strength=args.spatial_strength,
             matched_noise=False,
+            per_condition_seeds=[seed for _, _, _, seed in batch_jobs],
         )
-        for offset, (stem, image) in enumerate(zip(batch_stems, images, strict=True)):
-            index = start + offset
-            generated_path = generated / f"{index:06d}_{stem}.png"
-            real_path = real / f"{index:06d}_{stem}.png"
+        for (source_index, stem, candidate_index, seed), image, condition in zip(
+            batch_jobs, images, conditions, strict=True
+        ):
+            generated_id = f"{source_index:06d}_{stem}__candidate_{candidate_index:02d}"
+            generated_path = generated / f"{generated_id}.png"
+            real_path = real / f"{stem}.png"
             image.save(generated_path)
             source = store.images_dir / f"{stem}.png"
             if not source.is_file():
                 raise FileNotFoundError(f"Real source tile not found: {source}")
-            shutil.copy2(source, real_path)
-            if index < args.num_grids:
-                spatial_map = conditions[offset].spatial.permute(1, 2, 0).cpu().numpy()
+            if not real_path.exists():
+                shutil.copy2(source, real_path)
+            if source_index < args.num_grids and candidate_index == 0:
+                spatial_map = condition.spatial.permute(1, 2, 0).cpu().numpy()
                 with Image.open(source) as source_image:
                     comparison_grid(
                         spatial_map, source_image, image, args.checkpoint.name
-                    ).save(grids / f"{index:06d}_{stem}.png")
+                    ).save(grids / f"{source_index:06d}_{stem}.png")
             records.append({
-                "index": index,
+                "index": len(records),
                 "stem": stem,
+                "source_stem": stem,
+                "source_index": source_index,
+                "candidate_index": candidate_index,
+                "generation_seed": seed,
+                "generated_id": generated_id,
                 "generated_path": str(generated_path),
                 "real_path": str(real_path),
                 "source_image": str(source),
                 "spatial_map": str(store.spatial_maps_dir / f"{stem}.npz"),
                 "morphology_row": str(store.morphology_table),
             })
-        print(f"Generated {min(start + args.batch_size, len(selected))}/{len(selected)}", flush=True)
+        print(f"Generated {min(start + args.batch_size, len(jobs))}/{len(jobs)} candidates", flush=True)
 
     _write_json(out / "manifest.json", {
         "schema_version": 1,
@@ -196,13 +221,30 @@ def main() -> None:
         "sample_seed": args.sample_seed,
         "steps": args.steps,
         "spatial_strength": args.spatial_strength,
+        "candidates_per_tile": args.candidates_per_tile,
         "matched_initial_noise": False,
         "num_grids": args.num_grids,
         "records": records,
     })
     if not args.skip_metrics:
-        _metrics(records, out)
-    print(f"Wrote {len(records)} generated/real pairs to {out}")
+        if args.candidates_per_tile == 1:
+            result = _metrics(records)
+            _write_json(out / "fid_kid.json", result)
+            print(json.dumps(result, indent=2), flush=True)
+        else:
+            by_candidate = {}
+            for candidate_index in range(args.candidates_per_tile):
+                result = _metrics([item for item in records if item["candidate_index"] == candidate_index])
+                by_candidate[str(candidate_index)] = result
+            summary = {
+                "candidates_per_tile": args.candidates_per_tile,
+                "per_candidate": by_candidate,
+                "fid_mean": sum(item["fid"] for item in by_candidate.values()) / len(by_candidate),
+                "kid_mean_mean": sum(item["kid_mean"] for item in by_candidate.values()) / len(by_candidate),
+            }
+            _write_json(out / "fid_kid_by_candidate.json", summary)
+            print(json.dumps(summary, indent=2), flush=True)
+    print(f"Wrote {len(records)} generated candidates for {len(selected)} source tiles to {out}")
 
 
 if __name__ == "__main__":
