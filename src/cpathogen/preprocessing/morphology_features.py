@@ -10,7 +10,7 @@ from joblib import Parallel, delayed, dump
 from sklearn.preprocessing import StandardScaler
 from tqdm import tqdm
 
-from cpathogen.utils.paths import MORPHOLOGY_DIR, TCGA_GEOJSON, TCGA_TILES
+from cpathogen.utils.paths import MORPHOLOGY_DIR, MORPHOLOGY_STATS, TCGA_GEOJSON, TCGA_TILES
 
 
 def calculate_nuclei_features_single(img_path, geojson_path):
@@ -281,7 +281,7 @@ def main(argv: list[str] | None = None) -> None:
     )
     parser.add_argument(
         "--output",
-        default=str(MORPHOLOGY_DIR / "standardized.parquet"),
+        default=str(MORPHOLOGY_STATS),
     )
     parser.add_argument(
         "--scaler-output",

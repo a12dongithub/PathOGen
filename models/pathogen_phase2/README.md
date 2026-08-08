@@ -3,7 +3,7 @@
 Canonical local checkpoint:
 
 ```text
-artifacts/models/pathogen_phase2/checkpoint_30000/
+models/pathogen_phase2/checkpoint_30000/
 ├── unet/                 # trained eight-channel diffusion UNet
 ├── vae/                  # frozen VAE bundled by the accelerator checkpoint
 ├── spatial_encoder.pt    # trained five-channel spatial encoder

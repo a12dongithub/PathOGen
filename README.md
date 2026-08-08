@@ -65,9 +65,7 @@ refactored/
 ├── experiments/                 # active Workflow 05 intervention plugins
 ├── configs/                     # active data/model/experiment contracts
 ├── data/                        # six aligned TCGA tiles, GeoJSON, and conditions
-├── artifacts/
-│   ├── models/                  # CellViT++, Phase-1, and Phase-2 checkpoints
-│   └── runs/                    # generation/evaluation outputs
+├── models/                      # CellViT++ and Phase-2 checkpoints
 ├── tests/                       # active unit and checkpoint integration checks
 ├── third_party/cellvit_plus_plus/
 ├── docs/                        # four project documents plus report assets
@@ -98,12 +96,13 @@ READMEs:
 The active repository expects:
 
 ```text
-artifacts/models/cellvit_plus_plus/cellvit_sam_h_x40_amp_001/model.pth
-artifacts/models/pathogen_phase1/checkpoint_30000/unet/
-artifacts/models/pathogen_phase2/checkpoint_30000/
-data/interim/tiles/tcga_brca/
-data/interim/annotations/tcga_brca/geojson/
-data/processed/conditions/
+models/cellvit_plus_plus/cellvit_sam_h_x40_amp_001/model.pth
+models/pathogen_phase2/checkpoint_30000/
+data/images/
+data/geojsons/
+data/spatial_maps/
+data/morphology_stats.parquet
+data/evaluations/
 ```
 
 The included six-tile fixture is for integration checks. It is not a

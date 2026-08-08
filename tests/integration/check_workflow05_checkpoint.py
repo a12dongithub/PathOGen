@@ -18,11 +18,10 @@ import torch
 
 from cpathogen.generation.checkpoints import load_phase2_conditioning_models
 from cpathogen.generation.conditioning import film_condition
-from cpathogen.utils.paths import ARTIFACT_ROOT, MORPHOLOGY_DIR, SPATIAL_MAPS
+from cpathogen.utils.paths import MODEL_ROOT, MORPHOLOGY_STATS, SPATIAL_MAPS
 
 DEFAULT_CHECKPOINT = (
-    ARTIFACT_ROOT
-    / "models"
+    MODEL_ROOT
     / "pathogen_phase2"
     / "checkpoint_30000"
 )
@@ -34,7 +33,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--spatial-maps-dir", default=str(SPATIAL_MAPS))
     parser.add_argument(
         "--morphology-table",
-        default=str(MORPHOLOGY_DIR / "standardized.parquet"),
+        default=str(MORPHOLOGY_STATS),
     )
     parser.add_argument("--stem", default=None)
     parser.add_argument("--seed", type=int, default=42)

@@ -25,11 +25,11 @@ from cpathogen.generation.visualization import comparison_grid
 
 def _args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--data-root", type=Path, default=REPO / "data/processed/conditions")
-    p.add_argument("--images-dir", type=Path, default=REPO / "data/interim/tiles/tcga_brca")
+    p.add_argument("--data-root", type=Path, default=REPO / "data")
+    p.add_argument("--images-dir", type=Path, default=REPO / "data/images")
     p.add_argument("--spatial-maps-dir", type=Path)
     p.add_argument("--morphology-table", type=Path)
-    p.add_argument("--checkpoint", type=Path, default=REPO / "artifacts/models/pathogen_phase2/checkpoint_30000")
+    p.add_argument("--checkpoint", type=Path, default=REPO / "models/pathogen_phase2/checkpoint_30000")
     p.add_argument("--output-dir", type=Path, required=True)
     p.add_argument("--stem", action="append", dest="stems")
     p.add_argument("--num-tiles", type=int, default=100)

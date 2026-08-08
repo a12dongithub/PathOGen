@@ -104,9 +104,9 @@ class ConditionStore:
             )
             flat_morphology = self.data_root / "morphology_stats.parquet"
             default_morphology = (
-                canonical_morphology
-                if canonical_morphology.is_file()
-                else flat_morphology
+                flat_morphology
+                if flat_morphology.is_file()
+                else canonical_morphology
             )
         else:
             default_morphology = self.data_root / "morphology" / "standardized.parquet"

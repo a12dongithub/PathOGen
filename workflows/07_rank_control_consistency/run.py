@@ -23,7 +23,7 @@ from cpathogen.preprocessing.spatial_maps import build_spatial_maps
 def _args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--run-dir", type=Path, required=True)
-    p.add_argument("--annotation-model", type=Path, default=REPO / "artifacts/models/cellvit_plus_plus/cellvit_sam_h_x40_amp_001/model.pth")
+    p.add_argument("--annotation-model", type=Path, default=REPO / "models/cellvit_plus_plus/cellvit_sam_h_x40_amp_001/model.pth")
     p.add_argument("--cellvit-root", type=Path, default=REPO / "third_party/cellvit_plus_plus")
     p.add_argument("--device", choices=("auto", "cpu", "cuda", "mps"), default="auto")
     p.add_argument("--dtype", choices=("auto", "float16", "bfloat16", "float32"), default="auto")

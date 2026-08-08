@@ -1,8 +1,4 @@
-"""Canonical repository-relative paths.
-
-Runtime jobs may override the data and artifact roots with
-``CPATHOGEN_DATA_ROOT`` and ``CPATHOGEN_ARTIFACT_ROOT``.
-"""
+"""Canonical repository-relative paths for the compact data/model layout."""
 
 from __future__ import annotations
 
@@ -12,15 +8,18 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 DATA_ROOT = Path(os.environ.get("CPATHOGEN_DATA_ROOT", PROJECT_ROOT / "data"))
-ARTIFACT_ROOT = Path(
-    os.environ.get("CPATHOGEN_ARTIFACT_ROOT", PROJECT_ROOT / "artifacts")
-)
+MODEL_ROOT = Path(os.environ.get("CPATHOGEN_MODEL_ROOT", PROJECT_ROOT / "models"))
 
-TCGA_TILES = DATA_ROOT / "interim" / "tiles" / "tcga_brca"
-TCGA_GEOJSON = (
-    DATA_ROOT / "interim" / "annotations" / "tcga_brca" / "geojson"
-)
-CONDITIONS_ROOT = DATA_ROOT / "processed" / "conditions"
-SPATIAL_MAPS = CONDITIONS_ROOT / "spatial_maps"
-MORPHOLOGY_DIR = CONDITIONS_ROOT / "morphology"
-CONDITIONS_METADATA = CONDITIONS_ROOT / "metadata.jsonl"
+IMAGES_DIR = DATA_ROOT / "images"
+GEOJSON_DIR = DATA_ROOT / "geojsons"
+SPATIAL_MAPS = DATA_ROOT / "spatial_maps"
+MORPHOLOGY_STATS = DATA_ROOT / "morphology_stats.parquet"
+MORPHOLOGY_DIR = DATA_ROOT / "morphology"
+CONDITIONS_METADATA = DATA_ROOT / "metadata.jsonl"
+EVALUATIONS_ROOT = DATA_ROOT / "evaluations"
+
+# Compatibility aliases for preprocessing code.  They intentionally resolve to
+# the compact layout rather than the former interim/processed hierarchy.
+TCGA_TILES = IMAGES_DIR
+TCGA_GEOJSON = GEOJSON_DIR
+CONDITIONS_ROOT = DATA_ROOT

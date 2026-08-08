@@ -3,7 +3,7 @@
 The active Phase-1 initializer is:
 
 ```text
-artifacts/models/pathogen_phase1/checkpoint_30000/
+models/pathogen_phase1/checkpoint_30000/
 └── unet/
     ├── config.json
     └── diffusion_pytorch_model.safetensors

@@ -21,20 +21,11 @@ data/**
 !data/**/
 !data/**/README.md
 
-# Small, aligned repository fixture used by workflows 01, 02, and 05
-!data/interim/tiles/tcga_brca/*.png
-!data/interim/annotations/
-!data/interim/annotations/tcga_brca/
-!data/interim/annotations/tcga_brca/geojson/
-!data/interim/annotations/tcga_brca/geojson/*.geojson
-!data/processed/conditions/metadata.jsonl
-!data/processed/conditions/spatial_maps/*.npz
-!data/processed/conditions/morphology/feature_manifest.json
-!data/processed/conditions/morphology/standardized.parquet
-
-artifacts/**
-!artifacts/**/
-!artifacts/**/README.md
+# Full inputs, generated tiles, evaluation annotations, and checkpoints are
+# local-only.  Small README files document the expected layouts.
+models/**
+!models/**/
+!models/**/README.md
 
 # Track archived source/docs, but not archived datasets, models, results, smoke
 # outputs, administrative records, or unclassified binary remnants.

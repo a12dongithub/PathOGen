@@ -39,11 +39,11 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_CELLVIT_ROOT = REPOSITORY_ROOT / "third_party/cellvit_plus_plus"
 DEFAULT_MODEL = (
     REPOSITORY_ROOT
-    / "artifacts/models/cellvit_plus_plus/cellvit_sam_h_x40_amp_001/model.pth"
+    / "models/cellvit_plus_plus/cellvit_sam_h_x40_amp_001/model.pth"
 )
-DEFAULT_INPUT_DIR = REPOSITORY_ROOT / "data/interim/tiles/tcga_brca"
+DEFAULT_INPUT_DIR = REPOSITORY_ROOT / "data/images"
 DEFAULT_OUTPUT_DIR = (
-    REPOSITORY_ROOT / "data/interim/annotations/tcga_brca/geojson"
+    REPOSITORY_ROOT / "data/geojsons"
 )
 UPSTREAM_COMMIT = "463c5c44bfdebfbe3943597eaa84daf3f5e26a5f"
 SUPPORTED_IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".tif", ".tiff"}

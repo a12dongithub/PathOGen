@@ -26,7 +26,7 @@ pip install -e ".[annotation]"
 The default checkpoint is:
 
 ```text
-artifacts/models/cellvit_plus_plus/
+models/cellvit_plus_plus/
 └── cellvit_sam_h_x40_amp_001/
     └── model.pth
 ```
@@ -38,9 +38,8 @@ directory README and repeated in every run manifest.
 
 ## Annotate real source tiles
 
-The defaults read all supported images in
-`data/interim/tiles/tcga_brca/` and write matching GeoJSON files to
-`data/interim/annotations/tcga_brca/geojson/`:
+The defaults read all supported images in `data/images/` and write matching
+GeoJSON files to `data/geojsons/`:
 
 ```bash
 python workflows/01_annotate_nuclei/run.py
@@ -51,8 +50,8 @@ are validated instead of recomputed. To run one image into a separate directory:
 
 ```bash
 python workflows/01_annotate_nuclei/run.py \
-  --image data/interim/tiles/tcga_brca/<stem>.png \
-  --output-dir artifacts/runs/cellvit_source_check/annotations \
+  --image data/images/<stem>.png \
+  --output-dir data/annotations/cellvit_source_check \
   --device auto
 ```
 
@@ -62,7 +61,7 @@ Point the workflow at the `pairs.jsonl` written by Workflow 05:
 
 ```bash
 python workflows/01_annotate_nuclei/run.py \
-  --pairs-manifest artifacts/runs/<generation-run>/pairs.jsonl \
+  --pairs-manifest data/evaluations/<generation-run>/pairs.jsonl \
   --device auto
 ```
 
@@ -70,7 +69,7 @@ With no explicit `--output-dir`, annotations are written beside the generation
 manifest:
 
 ```text
-artifacts/runs/<generation-run>/
+data/evaluations/<generation-run>/
 ├── pairs.jsonl
 ├── images/
 └── cellvit_plus_plus_annotations/

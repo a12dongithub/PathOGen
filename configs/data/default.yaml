@@ -3,16 +3,16 @@ status: active_path_and_tensor_contract
 data_root: "${CPATHOGEN_DATA_ROOT:-data}"
 
 interim:
-  tcga_tiles: data/interim/tiles/tcga_brca
-  tcga_geojson: data/interim/annotations/tcga_brca/geojson
+  tcga_tiles: data/images
+  tcga_geojson: data/geojsons
 
 conditions:
-  spatial_maps: data/processed/conditions/spatial_maps
-  morphology_raw: data/processed/conditions/morphology/raw.parquet
-  morphology_standardized: data/processed/conditions/morphology/standardized.parquet
-  morphology_scaler: data/processed/conditions/morphology/scaler.joblib
-  morphology_manifest: data/processed/conditions/morphology/feature_manifest.json
-  metadata: data/processed/conditions/metadata.jsonl
+  spatial_maps: data/spatial_maps
+  morphology_raw: data/morphology/raw.parquet
+  morphology_standardized: data/morphology_stats.parquet
+  morphology_scaler: data/morphology/scaler.joblib
+  morphology_manifest: data/morphology/feature_manifest.json
+  metadata: data/metadata.jsonl
 
 spatial_map:
   height: 512

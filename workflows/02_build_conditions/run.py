@@ -10,7 +10,7 @@ import numpy as np
 from cpathogen.preprocessing.metadata import build_metadata
 from cpathogen.preprocessing.morphology_features import build_morphology_features
 from cpathogen.preprocessing.spatial_maps import build_spatial_maps
-from cpathogen.utils.paths import CONDITIONS_ROOT, TCGA_GEOJSON, TCGA_TILES
+from cpathogen.utils.paths import DATA_ROOT, TCGA_GEOJSON, TCGA_TILES
 
 
 def _tile_stems(directory: Path) -> set[str]:
@@ -29,7 +29,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--tiles-dir", default=str(TCGA_TILES))
     parser.add_argument("--geojson-dir", default=str(TCGA_GEOJSON))
-    parser.add_argument("--output-dir", default=str(CONDITIONS_ROOT))
+    parser.add_argument("--output-dir", default=str(DATA_ROOT))
     parser.add_argument("--n-jobs", type=int, default=8)
     parser.add_argument(
         "--allow-unmatched",
@@ -87,7 +87,7 @@ def main(argv: list[str] | None = None) -> None:
         tiles_dir,
         geojson_dir,
         morphology_dir / "raw.parquet",
-        morphology_dir / "standardized.parquet",
+        output_dir / "morphology_stats.parquet",
         morphology_dir / "scaler.joblib",
         morphology_dir / "feature_manifest.json",
         n_jobs=args.n_jobs,

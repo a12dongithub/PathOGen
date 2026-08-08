@@ -58,10 +58,10 @@ On the other machine, provide this layout (the model weights are intentionally
 not stored in Git):
 
 ```text
-data/interim/tiles/tcga_brca/<stem>.png                         # recommended
-data/processed/conditions/spatial_maps/<stem>.npz               # required
-data/processed/conditions/morphology/standardized.parquet       # required
-artifacts/models/pathogen_phase2/checkpoint_30000/              # required
+data/images/<stem>.png                                           # recommended
+data/spatial_maps/<stem>.npz                                     # required
+data/morphology_stats.parquet                                    # required
+models/pathogen_phase2/checkpoint_30000/                         # required
 ```
 
 The parquet must use the training-time feature order and standardization; copy
@@ -77,7 +77,7 @@ python workflows/05_generate_counterfactuals/run.py \
   --experiment experiments.spatial.relabel_all_cells \
   --intervention all_cells_inflammatory \
   --all-tiles --dry-run \
-  --output-dir artifacts/runs/tcga_test_relabel_inflammatory_dry_run
+  --output-dir data/evaluations/tcga_test_relabel_inflammatory_dry_run
 ```
 
 Then generate all matched pairs on a CUDA machine:
@@ -88,7 +88,7 @@ python workflows/05_generate_counterfactuals/run.py \
   --intervention all_cells_inflammatory \
   --all-tiles --seed 42 --steps 20 --batch-size 1 \
   --device cuda --dtype float16 --local-files-only \
-  --output-dir artifacts/runs/tcga_test_relabel_inflammatory_seed42
+  --output-dir data/evaluations/tcga_test_relabel_inflammatory_seed42
 ```
 
 The output directory must be new or empty. For `N` aligned tiles, one seed, and
@@ -98,10 +98,10 @@ and `N` rows in `pairs.jsonl`.
 The defaults are repository-local:
 
 ```text
-data/processed/conditions/spatial_maps/
-data/processed/conditions/morphology/standardized.parquet
-data/interim/tiles/tcga_brca/
-artifacts/models/pathogen_phase2/checkpoint_30000/
+data/spatial_maps/
+data/morphology_stats.parquet
+data/images/
+models/pathogen_phase2/checkpoint_30000/
 ```
 
 The checkpoint bundles its frozen SD 2.1 tokenizer, text encoder, and scheduler,

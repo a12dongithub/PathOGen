@@ -29,10 +29,10 @@ from cpathogen.counterfactuals import (
     select_interventions,
 )
 
-DEFAULT_DATA_ROOT = REPOSITORY_ROOT / "data/processed/conditions"
-DEFAULT_IMAGES_DIR = REPOSITORY_ROOT / "data/interim/tiles/tcga_brca"
+DEFAULT_DATA_ROOT = REPOSITORY_ROOT / "data"
+DEFAULT_IMAGES_DIR = REPOSITORY_ROOT / "data/images"
 DEFAULT_CHECKPOINT = (
-    REPOSITORY_ROOT / "artifacts/models/pathogen_phase2/checkpoint_30000"
+    REPOSITORY_ROOT / "models/pathogen_phase2/checkpoint_30000"
 )
 
 
@@ -196,7 +196,7 @@ def _difference_summary(
 
 def _default_output_dir() -> Path:
     timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-    return REPOSITORY_ROOT / "artifacts/runs/counterfactual_generation" / timestamp
+    return REPOSITORY_ROOT / "data/evaluations" / f"counterfactual_{timestamp}"
 
 
 def main() -> None:

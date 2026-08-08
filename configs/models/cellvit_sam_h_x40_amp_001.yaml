@@ -3,7 +3,7 @@ status: wired_workflow_01_default
 name: CellViT-SAM-H-x40-AMP-001
 architecture: CellViTSAM
 backbone: SAM-H
-checkpoint: artifacts/models/cellvit_plus_plus/cellvit_sam_h_x40_amp_001/model.pth
+checkpoint: models/cellvit_plus_plus/cellvit_sam_h_x40_amp_001/model.pth
 checkpoint_sha256: 356418f19d9d478f164c7a31f85274584fefaa02355815c09f52346c658c8ec4
 upstream:
   repository: https://github.com/TIO-IKIM/CellViT-plus-plus
