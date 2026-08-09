@@ -1,1 +1,0 @@
-"""Spatial-control intervention experiments."""

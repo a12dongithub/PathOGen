@@ -21,34 +21,11 @@ data/**
 !data/**/
 !data/**/README.md
 
-# Full inputs, generated tiles, evaluation annotations, and checkpoints are
-# local-only.  Small README files document the expected layouts.
+# Full inputs, generated tiles, and checkpoints are local-only.
 models/**
 !models/**/
 !models/**/README.md
 
-# Track archived source/docs, but not archived datasets, models, results, smoke
-# outputs, administrative records, or unclassified binary remnants.
-archive/*
-!archive/README.md
-!archive/code/
-!archive/code/**
-!archive/configs/
-!archive/configs/**
-!archive/docs/
-!archive/docs/**
-!archive/experiments/
-!archive/experiments/**
-!archive/legacy_code/
-!archive/legacy_code/**
-!archive/notebooks/
-!archive/notebooks/**
-!archive/tests/
-!archive/tests/**
-!archive/third_party/
-!archive/third_party/**
-!archive/tools/
-!archive/tools/**
 *.pt
 *.pth
 *.ckpt
