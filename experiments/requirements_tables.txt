@@ -1,0 +1,9 @@
+-r requirements_fidelity.txt
+
+# Additional out-of-loop evaluators used by experiment 06.
+csbdeep>=0.8,<1
+docopt>=0.6,<1
+matplotlib>=3.8,<4
+psutil>=5.9,<8
+stardist>=0.9,<1
+tensorflow>=2.16,<3

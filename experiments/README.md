@@ -101,6 +101,55 @@ pip install -r experiments/requirements_fidelity.txt
 
 On GTX 16-series cards, both PathOGen and CellViT++ automatically use FP32 because FP16 can produce non-finite tensors. Modern Colab/H200 GPUs use FP16 by default.
 
+## Experiment 06: final spatial and morphology tables
+
+`06_generate_fidelity_tables.py` produces the two compact paper tables from the
+saved reranking run, the aligned source dataset, and three nucleus evaluators.
+It defaults to 1,000 selected images for spatial/across-image tests and 200
+source images per feature for the five-level controlled test.
+
+- T1 reports total-count Spearman, macro per-type count Spearman, and one-to-one
+  centroid F1 at 25 and 50 pixels for CellViT++, HoVer-Net, StarDist, and a fixed
+  random-real-tile reference. StarDist's typed count is written as `N/A`.
+- T2 reports nuclear area, eccentricity, solidity, gradient, and RGB Spearman
+  correlations. Controlled values are the median within-tile Spearman across
+  `-1, -0.5, 0, +0.5, +1 SD`; every source keeps one noise seed and every other
+  condition fixed.
+- Existing selected CellViT++ GeoJSONs from `selected_candidates.csv` are reused.
+  Controlled CellViT++, HoVer-Net, and StarDist predictions are cached so a
+  restarted Colab runtime resumes rather than repeats completed work.
+
+Install the additional evaluators after pulling the branch:
+
+```bash
+pip install -r experiments/requirements_tables.txt
+```
+
+Then run a no-model validation:
+
+```bash
+python experiments/06_generate_fidelity_tables.py \
+  --rerank-dir /content/drive/MyDrive/PathOGenResults/cellvit_rerank_fid_kid/cellvit_rerank_6e25c52f8dcb \
+  --num-images 1000 --controlled-images 200 --dry-run
+```
+
+For the full run, provide the mounted-Drive locations of the official HoVer-Net
+repository and PanNuke fast checkpoint:
+
+```bash
+python experiments/06_generate_fidelity_tables.py \
+  --rerank-dir /content/drive/MyDrive/PathOGenResults/cellvit_rerank_fid_kid/cellvit_rerank_6e25c52f8dcb \
+  --hovernet-root /content/drive/MyDrive/REPLACE_WITH_HOVERNET_ROOT \
+  --hovernet-model /content/drive/MyDrive/REPLACE_WITH_PANNUKE_CHECKPOINT \
+  --num-images 1000 --controlled-images 200 \
+  --generation-batch-size 32 --cellvit-batch-size 32 --hovernet-batch-size 32
+```
+
+The final files are `T1_spatial_fidelity.csv`,
+`T2_morphology_fidelity.csv`, and `TABLES.md`. Detailed per-tile results,
+per-type correlations, confidence intervals, plans, and evaluator predictions
+are retained beside them for review and supplementary analysis.
+
 ## Complete Colab workflow
 
 The `colab-fidelity-experiments` branch includes a large-asset folder layout, automatic setup and download script, environment verifier, combined experiment launcher and a button-by-button notebook. See [`experiments/colab/README.md`](colab/README.md) or open [`PathOGen_Fidelity_Colab.ipynb`](PathOGen_Fidelity_Colab.ipynb).

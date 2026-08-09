@@ -45,6 +45,11 @@ CELL_TYPE_ALIASES = {
     "epithelial": "Epithelial",
     "non-neoplastic epithelium": "Epithelial",
     "non-neoplastic epithelial": "Epithelial",
+    # Segmentation-only evaluators such as StarDist intentionally do not
+    # invent a PanNuke class.  Keeping these instances lets total-count,
+    # centroid, and morphology metrics use their contours while typed metrics
+    # remain explicitly unavailable.
+    "unclassified": "Unclassified",
 }
 
 CELL_NAME_TO_CHANNEL = {name: channel for channel, name in CELL_TYPES.items()}

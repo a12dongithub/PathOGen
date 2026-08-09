@@ -178,6 +178,59 @@ The focused design fixes denoising at 30 steps and spatial strength at 2, then e
 
 The same eight deterministic noise seeds are reused across both configurations for each input. Use `--seeds-per-config` to reduce or increase that count. Green changes operate on standardized `g_mean` and are clamped to its empirical 1st–99th percentile range. The baseline FID/KID set always uses `cfg00_g0_c2_s30` and seed index zero. Use substantially more than 100 inputs for final paper FID; small runs are useful only for pipeline validation and preliminary KID estimates.
 
+## Paper fidelity tables
+
+After mounting Drive, pulling `colab-fidelity-experiments`, and running the
+normal asset setup, install the two additional evaluator packages and clone the
+official HoVer-Net code onto Colab's local disk:
+
+```python
+%cd /content/PathOGen
+!pip install -q -r experiments/requirements_tables.txt
+
+%cd /content
+!git clone https://github.com/vqdang/hover_net.git /content/hover_net
+%cd /content/PathOGen
+```
+
+Set the PanNuke checkpoint path to the file you placed in mounted Drive. First
+validate all 1,000 selected inputs and all controlled ranges without loading a
+model:
+
+```python
+RERANK_DIR = "/content/drive/MyDrive/PathOGenResults/cellvit_rerank_fid_kid/cellvit_rerank_6e25c52f8dcb"
+HOVERNET_MODEL = "/content/drive/MyDrive/REPLACE_WITH_PANNUKE_FAST_CHECKPOINT.tar"
+TABLE_OUTPUT = "/content/drive/MyDrive/PathOGenResults/paper_fidelity_tables"
+
+!python experiments/06_generate_fidelity_tables.py \
+  --rerank-dir "{RERANK_DIR}" \
+  --output-dir "{TABLE_OUTPUT}" \
+  --num-images 1000 \
+  --controlled-images 200 \
+  --dry-run
+```
+
+If the dry run passes, run the complete resumable pipeline:
+
+```python
+!python experiments/06_generate_fidelity_tables.py \
+  --rerank-dir "{RERANK_DIR}" \
+  --output-dir "{TABLE_OUTPUT}" \
+  --hovernet-root /content/hover_net \
+  --hovernet-model "{HOVERNET_MODEL}" \
+  --num-images 1000 \
+  --controlled-images 200 \
+  --generation-batch-size 32 \
+  --cellvit-batch-size 32 \
+  --hovernet-batch-size 32 \
+  --bootstrap 1000 \
+  --seed 42
+```
+
+The output and evaluator caches are Drive-backed. Repeating the final cell after
+a runtime reset reuses completed generated images, CellViT++/HoVer-Net/StarDist
+GeoJSONs, and measurement CSVs.
+
 ## Custom asset locations
 
 The setup script accepts `--asset-root`, `--data-root`, `--checkpoint-root`, `--cellvit-root`, `--cellvit-model`, and `--output-root`. If `--asset-root` is changed, pass the generated configuration to later commands:

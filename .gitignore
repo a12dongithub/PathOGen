@@ -17,6 +17,7 @@
 !experiments/**/*.ipynb
 !experiments/**/*.md
 !experiments/requirements_fidelity.txt
+!experiments/requirements_tables.txt
 
 # Never track generated artifacts, caches, or checkpoints.
 **/__pycache__/
