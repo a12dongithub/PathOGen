@@ -167,13 +167,19 @@ class PaperTableTests(unittest.TestCase):
             FakeCatalog(frame),
             count=5,
             levels=[-0.5, -0.25, 0.0, 0.25, 0.5],
-            lower_quantile=0.0,
-            upper_quantile=1.0,
             seed=42,
         )
         self.assertEqual(len(plan), 5 * 5 * 7)
         self.assertEqual(plan["plan_id"].nunique(), len(plan))
         self.assertTrue((plan.groupby(["feature", "stem"]).size() == 5).all())
+        self.assertTrue((plan["input_delta_std"] == plan["dose_sd"]).all())
+        self.assertTrue(
+            (plan["input_value"] == plan["baseline_value"] + plan["dose_sd"]).all()
+        )
+        source_sets = plan.groupby("feature")["stem"].apply(set)
+        self.assertTrue(
+            all(feature_stems == source_sets.iloc[0] for feature_stems in source_sets)
+        )
 
     def test_random_tile_pairing_changes_patient(self):
         stems = [f"TCGA-AA-{index:04d}_x0_y0" for index in range(20)]
@@ -254,10 +260,6 @@ class PaperTableTests(unittest.TestCase):
                 "0",
                 "0.25",
                 "0.5",
-                "--range-lower-quantile",
-                "0",
-                "--range-upper-quantile",
-                "1",
                 "--dry-run",
             ]
             with patch.object(sys, "argv", argv):

@@ -114,7 +114,9 @@ source images per feature for the five-level controlled test.
 - T2 reports nuclear area, eccentricity, solidity, gradient, and RGB Spearman
   correlations. Controlled values are the median within-tile Spearman across
   `-1, -0.5, 0, +0.5, +1 SD`; every source keeps one noise seed and every other
-  condition fixed.
+  condition fixed. These are direct offsets in the morphology coordinates that
+  were standardized on the full training corpus before the validation split;
+  they are not rescaled or clipped using validation-subset quantiles.
 - Existing selected CellViT++ GeoJSONs from `selected_candidates.csv` are reused.
   Controlled CellViT++, HoVer-Net, and StarDist predictions are cached so a
   restarted Colab runtime resumes rather than repeats completed work.

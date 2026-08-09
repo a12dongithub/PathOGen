@@ -63,8 +63,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--controlled-levels", type=float, nargs="+", default=DEFAULT_DOSES
     )
-    parser.add_argument("--range-lower-quantile", type=float, default=0.01)
-    parser.add_argument("--range-upper-quantile", type=float, default=0.99)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--bootstrap", type=int, default=1000)
     parser.add_argument("--steps", type=int, default=30)
@@ -240,8 +238,6 @@ def build_controlled_plan(
     catalog: DatasetCatalog,
     count: int,
     levels: list[float],
-    lower_quantile: float,
-    upper_quantile: float,
     seed: int,
 ) -> pd.DataFrame:
     if sorted(levels) != list(levels) or len(set(levels)) < 4 or 0.0 not in levels:
@@ -249,33 +245,33 @@ def build_controlled_plan(
             "Controlled levels must be sorted, unique, include zero, and contain >=4 doses"
         )
     selected_by_stem = selected.set_index("stem")
+    controlled_features = list(TABLE_MORPH_FEATURES.values())
+    shuffled = selected["stem"].astype(str).tolist()
+    random.Random(seed).shuffle(shuffled)
+    eligible = [
+        stem
+        for stem in shuffled
+        if np.isfinite(
+            catalog.morphology.loc[stem, controlled_features].to_numpy(dtype=float)
+        ).all()
+    ]
+    if len(eligible) < count:
+        raise RuntimeError(
+            f"Only {len(eligible)} selected cases have finite values for every "
+            f"controlled morphology coordinate; requested {count}."
+        )
+
+    # The morphology parquet was standardized on the full training corpus before
+    # the validation split was created. One SD is therefore exactly one coordinate
+    # unit; validation-subset statistics must not redefine or clip that unit.
+    controlled_stems = eligible[:count]
     rows = []
-    for feature_index, feature in enumerate(TABLE_MORPH_FEATURES.values()):
-        series = catalog.morphology[feature].dropna()
-        scale = float(series.std(ddof=0))
-        lower = float(series.quantile(lower_quantile))
-        upper = float(series.quantile(upper_quantile))
-        shuffled = selected["stem"].astype(str).tolist()
-        random.Random(seed + feature_index).shuffle(shuffled)
-        eligible = []
-        for stem in shuffled:
-            baseline = float(catalog.morphology.loc[stem, feature])
-            targets = [baseline + level * scale for level in levels]
-            if min(targets) >= lower and max(targets) <= upper:
-                eligible.append(stem)
-            if len(eligible) == count:
-                break
-        if len(eligible) != count:
-            raise RuntimeError(
-                f"Only {len(eligible)} selected cases support the full ±1 SD range for "
-                f"{feature} inside q{lower_quantile:.2f}–q{upper_quantile:.2f}; "
-                f"requested {count}. Reduce --controlled-images or the dose range."
-            )
-        for stem in eligible:
+    for feature in controlled_features:
+        for stem in controlled_stems:
             baseline = float(catalog.morphology.loc[stem, feature])
             fixed_seed = int(selected_by_stem.loc[stem, "selected_seed"])
             for level in levels:
-                target = baseline + float(level) * scale
+                target = baseline + float(level)
                 token = (
                     f"{level:+.2f}".replace("+", "p")
                     .replace("-", "m")
@@ -294,10 +290,9 @@ def build_controlled_plan(
                         "feature": feature,
                         "dose_sd": float(level),
                         "baseline_value": baseline,
-                        "feature_sd": scale,
+                        "feature_sd": 1.0,
+                        "input_delta_std": float(level),
                         "input_value": target,
-                        "allowed_lower": lower,
-                        "allowed_upper": upper,
                         "seed": fixed_seed,
                         "artifact_id": artifact_id,
                     }
@@ -481,8 +476,6 @@ def main() -> None:
         raise ValueError("Use at least three across-image and controlled source tiles")
     if args.bootstrap < 0 or args.save_every < 1:
         raise ValueError("bootstrap must be non-negative and save-every positive")
-    if not 0 <= args.range_lower_quantile < args.range_upper_quantile <= 1:
-        raise ValueError("Morphology range quantiles are invalid")
 
     args.data_dir = args.data_dir.expanduser().resolve()
     args.rerank_dir = args.rerank_dir.expanduser().resolve()
@@ -504,8 +497,6 @@ def main() -> None:
         catalog,
         args.controlled_images,
         list(args.controlled_levels),
-        args.range_lower_quantile,
-        args.range_upper_quantile,
         args.seed,
     )
     generation_suffix = (
@@ -531,6 +522,9 @@ def main() -> None:
             "controlled_plan_rows": len(controlled_plan),
             "controlled_unique_images": int(controlled_plan["artifact_id"].nunique()),
             "controlled_levels_sd": list(args.controlled_levels),
+            "controlled_intervention_space": (
+                "full-training-corpus standardized morphology coordinates"
+            ),
             "features": list(TABLE_MORPH_FEATURES.values()),
             "evaluators": list(args.evaluators),
             "random_tile": "fixed one-to-one real-tile pairing from another patient; source GeoJSON reused",
@@ -546,10 +540,8 @@ def main() -> None:
                 "same_seed_within_source": True,
                 "neutral_morphology": True,
                 "one_changed_coordinate": True,
-                "range_quantiles": [
-                    args.range_lower_quantile,
-                    args.range_upper_quantile,
-                ],
+                "standardized_unit_per_sd": 1.0,
+                "validation_subset_clipping": False,
             },
             "bootstrap": args.bootstrap,
             "bootstrap_unit": "TCGA patient inferred from tile stem",

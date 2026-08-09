@@ -68,7 +68,7 @@ The default CellViT++ source is pinned to a tested upstream commit. Override it 
   --num-images 3
 ```
 
-Verification checks CUDA, CuPy, the aligned dataset, checkpoint structure, CellViT++ imports and checkpoint, then runs the unit tests. The dry run validates all three experiment plans and morphology ranges without loading either model.
+Verification checks CUDA, CuPy, the aligned dataset, checkpoint structure, CellViT++ imports and checkpoint, then runs the unit tests. The dry run validates all three experiment plans and standardized morphology controls without loading either model.
 
 ## 4. End-to-end smoke test
 
@@ -194,7 +194,7 @@ official HoVer-Net code onto Colab's local disk:
 ```
 
 Set the PanNuke checkpoint path to the file you placed in mounted Drive. First
-validate all 1,000 selected inputs and all controlled ranges without loading a
+validate all 1,000 selected inputs and all controlled interventions without loading a
 model:
 
 ```python
