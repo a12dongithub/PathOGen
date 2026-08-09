@@ -152,6 +152,14 @@ The final files are `T1_spatial_fidelity.csv`,
 per-type correlations, confidence intervals, plans, and evaluator predictions
 are retained beside them for review and supplementary analysis.
 
+On GPUs with at least 20 GiB, `--generator-memory-mode auto` selects throughput
+mode: attention slicing and sliced/tiled VAE decoding are disabled, and CUDA OOM
+automatically halves the requested generation batch. Each diffusion batch logs
+its actual size and peak allocated/reserved VRAM. Use
+`--generator-memory-mode balanced` only when throughput mode repeatedly falls
+back. HoVer-Net defaults to `--hovernet-memory-fraction 0.8`; StarDist's official
+`predict_instances` path remains single-image inference.
+
 ## Complete Colab workflow
 
 The `colab-fidelity-experiments` branch includes a large-asset folder layout, automatic setup and download script, environment verifier, combined experiment launcher and a button-by-button notebook. See [`experiments/colab/README.md`](colab/README.md) or open [`PathOGen_Fidelity_Colab.ipynb`](PathOGen_Fidelity_Colab.ipynb).

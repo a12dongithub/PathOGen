@@ -71,7 +71,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--cellvit-batch-size", type=int, default=32)
     parser.add_argument("--hovernet-batch-size", type=int, default=32)
     parser.add_argument(
+        "--hovernet-memory-fraction",
+        type=float,
+        default=0.8,
+        help="Maximum GPU-memory fraction exposed to official HoVer-Net inference",
+    )
+    parser.add_argument(
         "--generator-precision", choices=("auto", "fp16", "fp32"), default="auto"
+    )
+    parser.add_argument(
+        "--generator-memory-mode",
+        choices=("auto", "throughput", "balanced", "low-vram"),
+        default="auto",
+        help="GPU memory strategy; auto uses throughput mode on GPUs with >=20 GiB",
     )
     parser.add_argument(
         "--cellvit-precision", choices=("auto", "fp16", "fp32"), default="auto"
@@ -476,6 +488,8 @@ def main() -> None:
         raise ValueError("Use at least three across-image and controlled source tiles")
     if args.bootstrap < 0 or args.save_every < 1:
         raise ValueError("bootstrap must be non-negative and save-every positive")
+    if not 0 < args.hovernet_memory_fraction <= 1:
+        raise ValueError("hovernet-memory-fraction must be in (0, 1]")
 
     args.data_dir = args.data_dir.expanduser().resolve()
     args.rerank_dir = args.rerank_dir.expanduser().resolve()
@@ -527,6 +541,8 @@ def main() -> None:
             ),
             "features": list(TABLE_MORPH_FEATURES.values()),
             "evaluators": list(args.evaluators),
+            "generator_memory_mode": args.generator_memory_mode,
+            "hovernet_memory_fraction": args.hovernet_memory_fraction,
             "random_tile": "fixed one-to-one real-tile pairing from another patient; source GeoJSON reused",
             "centroid_matching": {
                 "radii_pixels": [25, 50],
@@ -610,6 +626,7 @@ def main() -> None:
             args.hovernet_batch_size,
             args.hovernet_model_mode,
             args.overwrite,
+            memory_fraction=args.hovernet_memory_fraction,
         )
         controlled_predictions = ensure_hovernet_predictions(
             controlled_images,
@@ -621,6 +638,7 @@ def main() -> None:
             args.hovernet_batch_size,
             args.hovernet_model_mode,
             args.overwrite,
+            memory_fraction=args.hovernet_memory_fraction,
         )
         all_prediction_sets["HoVer-Net"] = (
             selected_predictions,

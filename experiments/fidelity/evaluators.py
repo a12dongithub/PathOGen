@@ -280,7 +280,10 @@ def ensure_hovernet_predictions(
     batch_size: int,
     model_mode: str = "fast",
     overwrite: bool = False,
+    memory_fraction: float = 0.8,
 ) -> dict[str, Path]:
+    if not 0 < memory_fraction <= 1:
+        raise ValueError("HoVer-Net memory_fraction must be in (0, 1]")
     outputs = {}
     missing = []
     for artifact_id in images:
@@ -344,7 +347,7 @@ def ensure_hovernet_predictions(
         "tile",
         f"--input_dir={stage_dir}",
         f"--output_dir={raw_dir}",
-        "--mem_usage=0.2",
+        f"--mem_usage={memory_fraction:g}",
     ]
     print(f"[HoVer-Net] processing {len(unresolved)} missing images", flush=True)
     subprocess.run(command, cwd=project_root, check=True)

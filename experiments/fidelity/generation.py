@@ -26,6 +26,20 @@ from .guidance import (
 from .model_components import SpatialCondEncoder, inject_film_into_unet
 
 BASE_MODEL = "Manojb/stable-diffusion-2-1-base"
+MEMORY_MODES = ("auto", "throughput", "balanced", "low-vram")
+
+
+def resolve_memory_mode(requested: str, gpu_memory_gib: float, precision: str) -> str:
+    """Choose inference memory behavior without silently limiting large GPUs."""
+    if requested not in MEMORY_MODES:
+        raise ValueError(f"memory_mode must be one of {MEMORY_MODES}")
+    if requested != "auto":
+        return requested
+    if precision == "fp32" or gpu_memory_gib < 12:
+        return "low-vram"
+    if gpu_memory_gib >= 20:
+        return "throughput"
+    return "balanced"
 
 
 @dataclass(frozen=True)
@@ -44,13 +58,14 @@ def _load_torch_state(path: Path) -> dict[str, torch.Tensor]:
 
 
 class PathOGenGenerator:
-    """Single-image generator designed for paired fidelity experiments."""
+    """Batched PathOGen generator designed for paired fidelity experiments."""
 
     def __init__(
         self,
         checkpoint_dir: Path,
         precision: str = "auto",
         low_vram: bool | None = None,
+        memory_mode: str = "auto",
         base_model: str = BASE_MODEL,
     ):
         self.checkpoint_dir = checkpoint_dir.resolve()
@@ -59,23 +74,27 @@ class PathOGenGenerator:
             raise RuntimeError("CUDA is required for PathOGen experiment generation")
         self.device = torch.device("cuda")
         self.gpu_name = torch.cuda.get_device_name(0)
-        self.gpu_memory_gib = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+        self.gpu_memory_gib = torch.cuda.get_device_properties(0).total_memory / (
+            1024**3
+        )
         if precision not in {"auto", "fp16", "fp32"}:
             raise ValueError("precision must be auto, fp16, or fp32")
         if precision == "auto":
             precision = "fp32" if "GTX 16" in self.gpu_name.upper() else "fp16"
         self.precision = precision
         self.dtype = torch.float16 if precision == "fp16" else torch.float32
-        self.low_vram = (
-            self.gpu_memory_gib < 12 or self.dtype == torch.float32
-            if low_vram is None
-            else bool(low_vram)
+        if low_vram is not None:
+            memory_mode = "low-vram" if low_vram else memory_mode
+        self.memory_mode = resolve_memory_mode(
+            memory_mode, self.gpu_memory_gib, self.precision
         )
+        self.low_vram = self.memory_mode == "low-vram"
         self.unet: UNet2DConditionModel | None = None
         self.vae: AutoencoderKL | None = None
         self.spatial_encoder: SpatialCondEncoder | None = None
         self.noise_scheduler: DDPMScheduler | None = None
         self.text_embeddings: torch.Tensor | None = None
+        self._adaptive_batch_limit: int | None = None
 
     @property
     def loaded(self) -> bool:
@@ -97,7 +116,9 @@ class PathOGenGenerator:
             "gpu": self.gpu_name,
             "gpu_memory_gib": round(self.gpu_memory_gib, 2),
             "precision": self.precision,
+            "memory_mode": self.memory_mode,
             "low_vram": self.low_vram,
+            "adaptive_batch_limit": self._adaptive_batch_limit,
         }
 
     def load(self) -> None:
@@ -111,9 +132,13 @@ class PathOGenGenerator:
             self.checkpoint_dir / "spatial_encoder.pt",
         ):
             if not required.is_file():
-                raise FileNotFoundError(f"Required checkpoint artifact missing: {required}")
+                raise FileNotFoundError(
+                    f"Required checkpoint artifact missing: {required}"
+                )
 
-        tokenizer = CLIPTokenizer.from_pretrained(self.base_model, subfolder="tokenizer")
+        tokenizer = CLIPTokenizer.from_pretrained(
+            self.base_model, subfolder="tokenizer"
+        )
         text_encoder = CLIPTextModel.from_pretrained(
             self.base_model, subfolder="text_encoder", torch_dtype=self.dtype
         ).to(self.device)
@@ -148,11 +173,15 @@ class PathOGenGenerator:
                 f"{len(non_film_missing)} non-FiLM missing, {len(unexpected)} unexpected"
             )
         del state
-        film_mlps.load_state_dict(_load_torch_state(self.checkpoint_dir / "film_mlps.pt"))
-        # "max" slices attention one head at a time and severely under-utilizes
-        # modern 20+ GiB GPUs. "auto" remains memory conscious while allowing
-        # useful batched throughput on L4/A100/H100-class devices.
-        unet.set_attention_slice("auto" if self.gpu_memory_gib >= 16 else "max")
+        film_mlps.load_state_dict(
+            _load_torch_state(self.checkpoint_dir / "film_mlps.pt")
+        )
+        if self.memory_mode == "throughput":
+            unet.set_attention_slice(None)
+        elif self.memory_mode == "balanced":
+            unet.set_attention_slice("auto")
+        else:
+            unet.set_attention_slice("max")
         self.unet = unet.to(
             device="cpu" if self.low_vram else self.device, dtype=self.dtype
         ).eval()
@@ -174,8 +203,15 @@ class PathOGenGenerator:
             vae = AutoencoderKL.from_pretrained(
                 self.base_model, subfolder="vae", torch_dtype=torch.float32
             )
-        vae.enable_slicing()
-        vae.enable_tiling()
+        if self.memory_mode == "throughput":
+            vae.disable_slicing()
+            vae.disable_tiling()
+        elif self.memory_mode == "balanced":
+            vae.enable_slicing()
+            vae.disable_tiling()
+        else:
+            vae.enable_slicing()
+            vae.enable_tiling()
         self.vae = vae.to("cpu" if self.low_vram else self.device).eval()
         self.noise_scheduler = DDPMScheduler.from_pretrained(
             self.base_model, subfolder="scheduler"
@@ -213,18 +249,26 @@ class PathOGenGenerator:
         assert self.noise_scheduler is not None
         assert self.text_embeddings is not None
         if context.spatial_map.shape != (512, 512, 5):
-            raise ValueError(f"Expected spatial map 512x512x5, got {context.spatial_map.shape}")
+            raise ValueError(
+                f"Expected spatial map 512x512x5, got {context.spatial_map.shape}"
+            )
         if context.morphology.shape != (16,):
-            raise ValueError(f"Expected morphology vector length 16, got {context.morphology.shape}")
+            raise ValueError(
+                f"Expected morphology vector length 16, got {context.morphology.shape}"
+            )
 
         use_autocast = self.dtype == torch.float16
         autocast = (
-            lambda: torch.autocast(device_type="cuda", dtype=torch.float16)
-        ) if use_autocast else contextlib.nullcontext
+            (lambda: torch.autocast(device_type="cuda", dtype=torch.float16))
+            if use_autocast
+            else contextlib.nullcontext
+        )
 
         spatial = torch.from_numpy(context.spatial_map.astype(np.float32) / 255.0)
         spatial = spatial.permute(2, 0, 1).unsqueeze(0).to(dtype=self.dtype)
-        morphology = torch.from_numpy(context.morphology.astype(np.float32)).unsqueeze(0)
+        morphology = torch.from_numpy(context.morphology.astype(np.float32)).unsqueeze(
+            0
+        )
         morphology = morphology.to(self.device, dtype=self.dtype)
         effective_spatial_strength = float(
             context.metadata.get("guidance_spatial_scale", spatial_strength)
@@ -249,12 +293,15 @@ class PathOGenGenerator:
         )
         scheduler.set_timesteps(int(steps), device=self.device)
         generator = torch.Generator(device=self.device).manual_seed(int(context.seed))
-        latents = torch.randn(
-            (1, 4, 64, 64),
-            generator=generator,
-            device=self.device,
-            dtype=self.dtype,
-        ) * scheduler.init_noise_sigma
+        latents = (
+            torch.randn(
+                (1, 4, 64, 64),
+                generator=generator,
+                device=self.device,
+                dtype=self.dtype,
+            )
+            * scheduler.init_noise_sigma
+        )
 
         self._component_to_gpu(self.unet)
         embeddings = self.text_embeddings.to(self.device, dtype=self.dtype)
@@ -272,10 +319,10 @@ class PathOGenGenerator:
                         encoder_hidden_states=embeddings,
                         return_dict=False,
                     )[0]
-                    latents = scheduler.step(noise, timestep, latents, return_dict=False)[0]
-                latents = hook.on_denoising_step(
-                    context, step_index, timestep, latents
-                )
+                    latents = scheduler.step(
+                        noise, timestep, latents, return_dict=False
+                    )[0]
+                latents = hook.on_denoising_step(context, step_index, timestep, latents)
                 if not torch.isfinite(latents).all():
                     raise RuntimeError(
                         f"Non-finite latents at denoising step {step_index + 1}/{steps}"
@@ -305,14 +352,18 @@ class PathOGenGenerator:
         """Generate a true GPU batch while retaining one RNG stream per context."""
         if not contexts:
             return []
-        if len(contexts) == 1:
-            return [self._generate_once(contexts[0], steps, spatial_strength, hook)]
         self.load()
         assert self.unet is not None
         assert self.vae is not None
         assert self.spatial_encoder is not None
         assert self.noise_scheduler is not None
         assert self.text_embeddings is not None
+        torch.cuda.reset_peak_memory_stats(self.device)
+        print(
+            f"[generator] effective_batch={len(contexts)} mode={self.memory_mode} "
+            f"precision={self.precision} gpu={self.gpu_name}",
+            flush=True,
+        )
         for context in contexts:
             if context.spatial_map.shape != (512, 512, 5):
                 raise ValueError(
@@ -325,8 +376,10 @@ class PathOGenGenerator:
 
         use_autocast = self.dtype == torch.float16
         autocast = (
-            lambda: torch.autocast(device_type="cuda", dtype=torch.float16)
-        ) if use_autocast else contextlib.nullcontext
+            (lambda: torch.autocast(device_type="cuda", dtype=torch.float16))
+            if use_autocast
+            else contextlib.nullcontext
+        )
         spatial = np.stack(
             [context.spatial_map.astype(np.float32) / 255.0 for context in contexts]
         )
@@ -363,20 +416,23 @@ class PathOGenGenerator:
         scheduler.set_timesteps(int(steps), device=self.device)
         # Separate generators ensure every sample keeps its deterministic seed;
         # changing batch size does not alter the assigned random-noise stream.
-        latents = torch.cat(
-            [
-                torch.randn(
-                    (1, 4, 64, 64),
-                    generator=torch.Generator(device=self.device).manual_seed(
-                        int(context.seed)
-                    ),
-                    device=self.device,
-                    dtype=self.dtype,
-                )
-                for context in contexts
-            ],
-            dim=0,
-        ) * scheduler.init_noise_sigma
+        latents = (
+            torch.cat(
+                [
+                    torch.randn(
+                        (1, 4, 64, 64),
+                        generator=torch.Generator(device=self.device).manual_seed(
+                            int(context.seed)
+                        ),
+                        device=self.device,
+                        dtype=self.dtype,
+                    )
+                    for context in contexts
+                ],
+                dim=0,
+            )
+            * scheduler.init_noise_sigma
+        )
 
         self._component_to_gpu(self.unet)
         embeddings = self.text_embeddings.to(self.device, dtype=self.dtype).expand(
@@ -431,6 +487,15 @@ class PathOGenGenerator:
         self._component_to_cpu(self.vae)
         decoded = (decoded / 2 + 0.5).clamp(0, 1)
         arrays = decoded.permute(0, 2, 3, 1).detach().cpu().numpy()
+        torch.cuda.synchronize(self.device)
+        peak_allocated = torch.cuda.max_memory_allocated(self.device) / (1024**3)
+        peak_reserved = torch.cuda.max_memory_reserved(self.device) / (1024**3)
+        print(
+            f"[generator] completed_batch={len(contexts)} "
+            f"peak_allocated={peak_allocated:.2f}GiB "
+            f"peak_reserved={peak_reserved:.2f}GiB",
+            flush=True,
+        )
         return [
             Image.fromarray((array * 255.0).round().astype(np.uint8))
             for array in arrays
@@ -438,9 +503,10 @@ class PathOGenGenerator:
 
     @staticmethod
     def _is_cuda_oom(error: RuntimeError) -> bool:
-        return isinstance(error, torch.OutOfMemoryError) or "out of memory" in str(
-            error
-        ).lower()
+        return (
+            isinstance(error, torch.OutOfMemoryError)
+            or "out of memory" in str(error).lower()
+        )
 
     def generate_batch(
         self,
@@ -469,8 +535,32 @@ class PathOGenGenerator:
                 )
                 for context in contexts
             ]
+        if (
+            self._adaptive_batch_limit is not None
+            and len(contexts) > self._adaptive_batch_limit
+        ):
+            limit = self._adaptive_batch_limit
+            print(
+                f"[generator] applying learned batch limit {limit} to "
+                f"{len(contexts)} contexts",
+                flush=True,
+            )
+            outputs = []
+            for start in range(0, len(contexts), limit):
+                outputs.extend(
+                    self.generate_batch(
+                        contexts[start : start + limit],
+                        steps,
+                        spatial_strength,
+                        hook,
+                        max_attempts,
+                    )
+                )
+            return outputs
         started = time.perf_counter()
-        active = [hook.adjust_conditions(context.clone(attempt=0)) for context in contexts]
+        active = [
+            hook.adjust_conditions(context.clone(attempt=0)) for context in contexts
+        ]
         split_at = None
         try:
             images = self._generate_batch_once(active, steps, spatial_strength, hook)
@@ -483,6 +573,11 @@ class PathOGenGenerator:
             # longer retains the failed batch's CUDA tensors.
             gc.collect()
             torch.cuda.empty_cache()
+            self._adaptive_batch_limit = (
+                split_at
+                if self._adaptive_batch_limit is None
+                else min(self._adaptive_batch_limit, split_at)
+            )
             print(
                 f"[generator] CUDA OOM at batch {len(active)}; retrying "
                 f"as {split_at}+{len(active) - split_at}",

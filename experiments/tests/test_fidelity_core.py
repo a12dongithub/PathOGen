@@ -13,6 +13,7 @@ from PIL import Image
 from experiments.fidelity.cellvit import CellViTRunner
 from experiments.fidelity.constants import MORPH_FEATURES
 from experiments.fidelity.data import CellObservation, load_cells
+from experiments.fidelity.generation import resolve_memory_mode
 from experiments.fidelity.guidance import (
     CandidateDecision,
     GenerationContext,
@@ -38,9 +39,18 @@ def cell(cell_type: str, x: float, y: float, radius: int = 4) -> CellObservation
 
 
 class FidelityCoreTests(unittest.TestCase):
+    def test_generator_memory_mode_uses_large_gpus_for_throughput(self):
+        self.assertEqual(resolve_memory_mode("auto", 40.0, "fp16"), "throughput")
+        self.assertEqual(resolve_memory_mode("auto", 22.0, "fp16"), "throughput")
+        self.assertEqual(resolve_memory_mode("auto", 16.0, "fp16"), "balanced")
+        self.assertEqual(resolve_memory_mode("auto", 40.0, "fp32"), "low-vram")
+        self.assertEqual(resolve_memory_mode("balanced", 40.0, "fp16"), "balanced")
+
     def test_morphology_pair_analysis(self):
         script = Path(__file__).parents[1] / "02_morphology_fidelity.py"
-        spec = importlib.util.spec_from_file_location("morphology_fidelity_script", script)
+        spec = importlib.util.spec_from_file_location(
+            "morphology_fidelity_script", script
+        )
         self.assertIsNotNone(spec)
         self.assertIsNotNone(spec.loader)
         module = importlib.util.module_from_spec(spec)

@@ -89,6 +89,12 @@ def parse_args() -> argparse.Namespace:
         "--generator-precision", choices=("auto", "fp16", "fp32"), default="auto"
     )
     parser.add_argument(
+        "--generator-memory-mode",
+        choices=("auto", "throughput", "balanced", "low-vram"),
+        default="auto",
+        help="GPU memory strategy; auto uses throughput mode on GPUs with >=20 GiB",
+    )
+    parser.add_argument(
         "--cellvit-precision", choices=("auto", "fp16", "fp32"), default="auto"
     )
     parser.add_argument(
@@ -143,7 +149,9 @@ def parse_args() -> argparse.Namespace:
         args.checkpoint_dir = args.checkpoint_dir or paths.checkpoint_dir
         args.cellvit_root = args.cellvit_root or paths.cellvit_root
         args.cellvit_model = args.cellvit_model or paths.cellvit_model
-        args.output_dir = args.output_dir or paths.output_root / "cellvit_rerank_fid_kid"
+        args.output_dir = (
+            args.output_dir or paths.output_root / "cellvit_rerank_fid_kid"
+        )
     missing = [
         name
         for name in (
@@ -180,13 +188,13 @@ def _bounded_assignment(
 ) -> list[tuple[int, int, float]]:
     if not source_indices or not predicted_indices:
         return []
-    source_xy = np.asarray([source[index].centroid for index in source_indices], dtype=float)
+    source_xy = np.asarray(
+        [source[index].centroid for index in source_indices], dtype=float
+    )
     predicted_xy = np.asarray(
         [predicted[index].centroid for index in predicted_indices], dtype=float
     )
-    distances = np.linalg.norm(
-        source_xy[:, None, :] - predicted_xy[None, :, :], axis=2
-    )
+    distances = np.linalg.norm(source_xy[:, None, :] - predicted_xy[None, :, :], axis=2)
     type_agreement = np.asarray(
         [
             [source[i].cell_type == predicted[j].cell_type for j in predicted_indices]
@@ -295,7 +303,9 @@ def green_condition(
         "green_baseline": float(morphology[index]),
         "green_requested": requested,
         "green_applied": float(changed[index]),
-        "green_clipped": not math.isclose(requested, float(changed[index]), abs_tol=1e-7),
+        "green_clipped": not math.isclose(
+            requested, float(changed[index]), abs_tol=1e-7
+        ),
     }
 
 
@@ -317,7 +327,9 @@ def run_id(
         "configs": [asdict(config) for config in DEFAULT_CONFIGS],
         "seeds_per_config": seeds_per_config,
     }
-    digest = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:12]
+    digest = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()[
+        :12
+    ]
     return f"cellvit_rerank_{digest}"
 
 
@@ -503,7 +515,10 @@ def load_rerank_progress(
         return [], [], 0
     completed_stems = selection_frame["stem"].astype(str).tolist()
     expected_rows = len(completed_stems) * len(DEFAULT_CONFIGS) * seeds_per_config
-    if completed_stems != stems[: len(completed_stems)] or len(score_frame) != expected_rows:
+    if (
+        completed_stems != stems[: len(completed_stems)]
+        or len(score_frame) != expected_rows
+    ):
         print(
             "[resume] Progress CSVs do not match the requested stem/config prefix; "
             "rebuilding from artifacts",
@@ -529,7 +544,9 @@ def main() -> None:
     if not 0 <= args.green_lower_quantile < args.green_upper_quantile <= 1:
         raise ValueError("green quantiles must satisfy 0 <= lower < upper <= 1")
     if args.kid_subsets < 1 or args.kid_subset_size < 2:
-        raise ValueError("KID subsets must be positive and subset size must be at least two")
+        raise ValueError(
+            "KID subsets must be positive and subset size must be at least two"
+        )
     if args.generation_batch_size < 1 or args.cellvit_batch_size < 1:
         raise ValueError("generation and CellViT batch sizes must be positive")
     if args.seeds_per_config < 1:
@@ -615,12 +632,16 @@ def main() -> None:
                     ~np.isclose(changed, baseline, atol=1e-7, rtol=0)
                 )
                 if config.green_sd == 0 and len(changed_indices):
-                    raise AssertionError("Green-neutral configuration changed morphology")
+                    raise AssertionError(
+                        "Green-neutral configuration changed morphology"
+                    )
                 if config.green_sd != 0 and changed_indices.tolist() not in (
                     [],
                     [MORPH_FEATURES.index("g_mean")],
                 ):
-                    raise AssertionError("Green intervention changed a non-green feature")
+                    raise AssertionError(
+                        "Green intervention changed a non-green feature"
+                    )
         print(
             f"Dry run passed: {len(stems)} inputs x {len(DEFAULT_CONFIGS)} configs "
             f"x {args.seeds_per_config} seeds = "
@@ -693,7 +714,9 @@ def main() -> None:
                 )
                 for entry, (image_path, generation_metadata) in zip(entries, generated):
                     stem, sample, context, green_details, _ = entry
-                    copy_image(sample.image_path, real_dir / f"{stem}.png", args.overwrite)
+                    copy_image(
+                        sample.image_path, real_dir / f"{stem}.png", args.overwrite
+                    )
                     copy_image(image_path, baseline_dir / f"{stem}.png", args.overwrite)
                     baseline_rows.append(
                         {
@@ -790,9 +813,7 @@ def main() -> None:
                 key = (job.config.denoising_steps, job.config.controlnet_strength)
                 generation_groups.setdefault(key, []).append(job)
             for (steps, strength), generation_jobs in generation_groups.items():
-                for job_batch in batches(
-                    generation_jobs, args.generation_batch_size
-                ):
+                for job_batch in batches(generation_jobs, args.generation_batch_size):
                     generated = phase_two.ensure_generated_batch(
                         [job.context for job in job_batch],
                         [job.artifact_name for job in job_batch],
@@ -804,7 +825,9 @@ def main() -> None:
 
             for job_batch in batches(jobs, args.cellvit_batch_size):
                 if any(job.generated_result is None for job in job_batch):
-                    raise RuntimeError("Internal error: candidate generation is incomplete")
+                    raise RuntimeError(
+                        "Internal error: candidate generation is incomplete"
+                    )
                 geojson_paths = phase_two.ensure_cellvit_batch(
                     [job.generated_result[0] for job in job_batch],  # type: ignore[index]
                     [job.artifact_name for job in job_batch],
@@ -820,13 +843,13 @@ def main() -> None:
 
             for stem in stem_window:
                 processed_inputs += 1
-                source_cells = load_cells(
-                    phase_two.catalog.sample(stem).geojson_path
-                )
+                source_cells = load_cells(phase_two.catalog.sample(stem).geojson_path)
                 candidate_rows = []
                 for job in (candidate for candidate in jobs if candidate.stem == stem):
                     if job.generated_result is None or job.cellvit_geojson is None:
-                        raise RuntimeError("Internal error: candidate inference is incomplete")
+                        raise RuntimeError(
+                            "Internal error: candidate inference is incomplete"
+                        )
                     image_path, generation_metadata = job.generated_result
                     predicted_cells = load_cells(job.cellvit_geojson)
                     score = score_spatial_cells(
@@ -849,9 +872,7 @@ def main() -> None:
                     candidate_rows.append(row)
                     all_rows.append(row)
 
-                best = max(
-                    candidate_rows, key=lambda row: float(row["spatial_score"])
-                )
+                best = max(candidate_rows, key=lambda row: float(row["spatial_score"]))
                 selected_path = selected_dir / f"{stem}.png"
                 copy_image(Path(best["generated_image"]), selected_path, True)
                 selections.append(
@@ -861,9 +882,8 @@ def main() -> None:
                         **best,
                     }
                 )
-                if (
-                    processed_inputs % args.save_every == 0
-                    or processed_inputs == len(stems)
+                if processed_inputs % args.save_every == 0 or processed_inputs == len(
+                    stems
                 ):
                     pd.DataFrame(all_rows).to_csv(
                         experiment_dir / "candidate_scores.csv", index=False
@@ -898,8 +918,7 @@ def main() -> None:
         "improvement_lower_is_better": (
             {
                 "fid": baseline_metrics["fid"] - selected_metrics["fid"],
-                "kid_mean": baseline_metrics["kid_mean"]
-                - selected_metrics["kid_mean"],
+                "kid_mean": baseline_metrics["kid_mean"] - selected_metrics["kid_mean"],
             }
             if baseline_metrics is not None and selected_metrics is not None
             else None

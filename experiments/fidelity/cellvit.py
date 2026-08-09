@@ -30,7 +30,9 @@ class CellViTRunner:
         self.device = torch.device(
             f"cuda:{gpu}" if torch.cuda.is_available() else "cpu"
         )
-        self.gpu_name = torch.cuda.get_device_name(gpu) if self.device.type == "cuda" else ""
+        self.gpu_name = (
+            torch.cuda.get_device_name(gpu) if self.device.type == "cuda" else ""
+        )
         if precision not in {"auto", "fp16", "fp32"}:
             raise ValueError("CellViT precision must be auto, fp16, or fp32")
         if precision == "auto":
@@ -43,6 +45,7 @@ class CellViTRunner:
         self.model = None
         self.postprocessor = None
         self.architecture = ""
+        self._adaptive_batch_limit: int | None = None
 
     def _load(self) -> None:
         if self.model is not None:
@@ -93,7 +96,9 @@ class CellViTRunner:
                 num_tissue_classes=run_conf["data"]["num_tissue_classes"],
             )
         else:
-            raise NotImplementedError(f"Unsupported CellViT architecture: {architecture}")
+            raise NotImplementedError(
+                f"Unsupported CellViT architecture: {architecture}"
+            )
         model.load_state_dict(checkpoint["model_state_dict"])
         self.model = model.eval().to(self.device)
         self.postprocessor = DetectionCellPostProcessor(
@@ -118,12 +123,14 @@ class CellViTRunner:
 
     @staticmethod
     def _prepare(predictions: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
-        predictions["nuclei_binary_map"] = F.softmax(
-            predictions["nuclei_binary_map"], dim=1
-        ).permute(0, 2, 3, 1).float()
-        predictions["nuclei_type_map"] = F.softmax(
-            predictions["nuclei_type_map"], dim=1
-        ).permute(0, 2, 3, 1).float()
+        predictions["nuclei_binary_map"] = (
+            F.softmax(predictions["nuclei_binary_map"], dim=1)
+            .permute(0, 2, 3, 1)
+            .float()
+        )
+        predictions["nuclei_type_map"] = (
+            F.softmax(predictions["nuclei_type_map"], dim=1).permute(0, 2, 3, 1).float()
+        )
         predictions["hv_map"] = predictions["hv_map"].permute(0, 2, 3, 1).float()
         return predictions
 
@@ -133,6 +140,22 @@ class CellViTRunner:
             return []
         self._load()
         assert self.model is not None and self.postprocessor is not None
+        if (
+            self._adaptive_batch_limit is not None
+            and len(images) > self._adaptive_batch_limit
+        ):
+            limit = self._adaptive_batch_limit
+            outputs = []
+            for start in range(0, len(images), limit):
+                outputs.extend(self.infer_batch(images[start : start + limit]))
+            return outputs
+        if self.device.type == "cuda":
+            torch.cuda.reset_peak_memory_stats(self.device)
+        print(
+            f"[cellvit] effective_batch={len(images)} precision={self.precision} "
+            f"gpu={self.gpu_name or 'CPU'}",
+            flush=True,
+        )
         tensor = torch.cat([self._tensor(image) for image in images], dim=0)
         use_amp = self.device.type == "cuda" and self.precision == "fp16"
         split_at = None
@@ -144,9 +167,10 @@ class CellViTRunner:
                 else:
                     predictions = self.model.forward(tensor, retrieve_tokens=True)
         except RuntimeError as error:
-            is_oom = isinstance(error, torch.OutOfMemoryError) or "out of memory" in str(
-                error
-            ).lower()
+            is_oom = (
+                isinstance(error, torch.OutOfMemoryError)
+                or "out of memory" in str(error).lower()
+            )
             if not is_oom or len(images) == 1:
                 raise
             split_at = len(images) // 2
@@ -157,6 +181,11 @@ class CellViTRunner:
             gc.collect()
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
+            self._adaptive_batch_limit = (
+                split_at
+                if self._adaptive_batch_limit is None
+                else min(self._adaptive_batch_limit, split_at)
+            )
             print(
                 f"[cellvit] CUDA OOM at batch {len(images)}; retrying "
                 f"as {split_at}+{len(images) - split_at}",
@@ -173,9 +202,21 @@ class CellViTRunner:
             with torch.inference_mode():
                 predictions = self.model.forward(tensor, retrieve_tokens=True)
             if not all(torch.isfinite(predictions[name]).all() for name in required):
-                raise RuntimeError("CellViT produced non-finite predictions after FP32 retry")
+                raise RuntimeError(
+                    "CellViT produced non-finite predictions after FP32 retry"
+                )
         predictions = self._prepare(predictions)
         _, cell_dicts = self.postprocessor.post_process_batch(predictions)
+        if self.device.type == "cuda":
+            torch.cuda.synchronize(self.device)
+            peak_allocated = torch.cuda.max_memory_allocated(self.device) / (1024**3)
+            peak_reserved = torch.cuda.max_memory_reserved(self.device) / (1024**3)
+            print(
+                f"[cellvit] completed_batch={len(images)} "
+                f"peak_allocated={peak_allocated:.2f}GiB "
+                f"peak_reserved={peak_reserved:.2f}GiB",
+                flush=True,
+            )
         return cell_dicts
 
     def infer(self, image: Image.Image) -> dict:
@@ -211,7 +252,9 @@ def save_cellvit_geojson(cells: dict, destination: Path) -> None:
                         "name": cell_name,
                         "color": list(CELL_COLORS[cell_name]),
                     },
-                    "centroid": np.asarray(cell["centroid"], dtype=float).round(3).tolist(),
+                    "centroid": np.asarray(cell["centroid"], dtype=float)
+                    .round(3)
+                    .tolist(),
                     "type_probability": round(float(cell["type_prob"]), 6),
                 },
             }

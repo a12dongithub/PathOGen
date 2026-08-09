@@ -36,6 +36,12 @@ def add_common_arguments(parser: argparse.ArgumentParser) -> None:
         "--generator-precision", choices=("auto", "fp16", "fp32"), default="auto"
     )
     parser.add_argument(
+        "--generator-memory-mode",
+        choices=("auto", "throughput", "balanced", "low-vram"),
+        default="auto",
+        help="GPU memory strategy; auto uses throughput mode on GPUs with >=20 GiB",
+    )
+    parser.add_argument(
         "--cellvit-precision", choices=("auto", "fp16", "fp32"), default="auto"
     )
     parser.add_argument(
@@ -80,7 +86,10 @@ def deterministic_seed(base_seed: int, *parts: str) -> int:
 
 
 def safe_name(value: str) -> str:
-    return "".join(character if character.isalnum() or character in "-_." else "_" for character in value)
+    return "".join(
+        character if character.isalnum() or character in "-_." else "_"
+        for character in value
+    )
 
 
 def write_json(path: Path, payload: Any) -> None:
@@ -130,9 +139,13 @@ class ExperimentRuntime:
     def generator(self) -> PathOGenGenerator:
         if self._generator is None:
             if self.args.checkpoint_dir is None:
-                raise ValueError("--checkpoint-dir is required when generation is needed")
+                raise ValueError(
+                    "--checkpoint-dir is required when generation is needed"
+                )
             self._generator = PathOGenGenerator(
-                self.args.checkpoint_dir, precision=self.args.generator_precision
+                self.args.checkpoint_dir,
+                precision=self.args.generator_precision,
+                memory_mode=getattr(self.args, "generator_memory_mode", "auto"),
             )
         return self._generator
 
@@ -151,7 +164,9 @@ class ExperimentRuntime:
         return self._cellvit
 
     def selected_stems(self) -> list[str]:
-        return self.catalog.select(self.args.num_images, self.args.seed, self.args.stems)
+        return self.catalog.select(
+            self.args.num_images, self.args.seed, self.args.stems
+        )
 
     def ensure_generated(
         self,
@@ -177,7 +192,9 @@ class ExperimentRuntime:
             )
             return image_path, metadata
         if self.args.analysis_only:
-            raise FileNotFoundError(f"Required generated artifact missing: {image_path}")
+            raise FileNotFoundError(
+                f"Required generated artifact missing: {image_path}"
+            )
         result = self.generator.generate(
             context,
             steps=actual_steps,
@@ -243,7 +260,10 @@ class ExperimentRuntime:
                 missing_indices.append(index)
         if missing_indices:
             if self.args.analysis_only:
-                first = self.generated_dir / f"{safe_name(artifact_names[missing_indices[0]])}.png"
+                first = (
+                    self.generated_dir
+                    / f"{safe_name(artifact_names[missing_indices[0]])}.png"
+                )
                 raise FileNotFoundError(f"Required generated artifact missing: {first}")
             results = self.generator.generate_batch(
                 [contexts[index] for index in missing_indices],
@@ -288,7 +308,9 @@ class ExperimentRuntime:
         if geojson_path.is_file() and not self.args.overwrite:
             return geojson_path
         if self.args.analysis_only:
-            raise FileNotFoundError(f"Required CellViT artifact missing: {geojson_path}")
+            raise FileNotFoundError(
+                f"Required CellViT artifact missing: {geojson_path}"
+            )
         cells = self.cellvit.infer(load_rgb_with_retry(image_path))
         save_cellvit_geojson(cells, geojson_path)
         return geojson_path
@@ -309,14 +331,19 @@ class ExperimentRuntime:
                 missing_indices.append(index)
         if missing_indices:
             if self.args.analysis_only:
-                first = self.cellvit_dir / f"{safe_name(artifact_names[missing_indices[0]])}.geojson"
+                first = (
+                    self.cellvit_dir
+                    / f"{safe_name(artifact_names[missing_indices[0]])}.geojson"
+                )
                 raise FileNotFoundError(f"Required CellViT artifact missing: {first}")
             images = []
             for index in missing_indices:
                 images.append(load_rgb_with_retry(image_paths[index]))
             cell_batches = self.cellvit.infer_batch(images)
             for index, cells in zip(missing_indices, cell_batches):
-                geojson_path = self.cellvit_dir / f"{safe_name(artifact_names[index])}.geojson"
+                geojson_path = (
+                    self.cellvit_dir / f"{safe_name(artifact_names[index])}.geojson"
+                )
                 save_cellvit_geojson(cells, geojson_path)
                 outputs[index] = geojson_path
         if any(output is None for output in outputs):
