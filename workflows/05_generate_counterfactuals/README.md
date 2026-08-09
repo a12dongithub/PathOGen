@@ -45,14 +45,13 @@ python workflows/05_generate_counterfactuals/run.py \
   --seed 42
 ```
 
-## Run a complete external test set
+## Run a complete dataset
 
 For Workflow 05, the required per-tile controls are the five-channel NPZ map
 and the corresponding row in the *standardized* 16-column morphology table.
 The source tile is optional for image generation itself, but should be present
-so `pairs.jsonl` records the source-image path and Workflow 01 can later
-re-annotate and compare each result. GeoJSON is not read by this workflow; it
-is required only to rebuild conditions with Workflow 02.
+so `pairs.jsonl` records its source-image path. This lean branch does not
+annotate images or rebuild conditions.
 
 On the other machine, provide this layout (the model weights are intentionally
 not stored in Git):
@@ -109,5 +108,5 @@ so the supported workflow does not require the original external dataset,
 checkpoint path, Hugging Face cache, or a network connection.
 
 The real H&E tile is recorded as a reference path in `pairs.jsonl`; it is not an
-input to this noise-to-image Phase-2 checkpoint. Historical one-off scripts in
-`misc/` remain reference material and are not the supported interface.
+input to this noise-to-image Phase-2 checkpoint. See `docs/` for the study
+protocol and model/data contract.

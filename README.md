@@ -3,6 +3,8 @@
 Lean codebase for generating matched H&E counterfactual datasets from the
 frozen direct-concat-plus-FiLM Phase-2 checkpoint.
 
+Start with [project documentation](docs/README.md).
+
 Included:
 
 - loading aligned five-channel spatial maps and standardized 16-value vectors;
