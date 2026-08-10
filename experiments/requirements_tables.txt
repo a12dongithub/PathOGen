@@ -3,7 +3,12 @@
 # Additional out-of-loop evaluators used by experiment 06.
 csbdeep>=0.8,<1
 docopt>=0.6,<1
+future>=0.18,<2
+imgaug==0.4.0
 matplotlib>=3.8,<4
 psutil>=5.9,<8
+scikit-learn>=1.4,<2
 stardist>=0.9,<1
+tensorboardx>=2.6,<3
 tensorflow>=2.16,<3
+termcolor>=2,<4

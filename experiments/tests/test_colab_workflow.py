@@ -53,6 +53,19 @@ def observation(cell_type: str, x: float, y: float) -> CellObservation:
 
 
 class ColabWorkflowTests(unittest.TestCase):
+    def test_table_requirements_include_official_hovernet_imports(self):
+        requirements = (
+            REPO_ROOT / "experiments" / "requirements_tables.txt"
+        ).read_text(encoding="utf-8")
+        for package in (
+            "future",
+            "imgaug",
+            "scikit-learn",
+            "tensorboardx",
+            "termcolor",
+        ):
+            self.assertIn(package, requirements.lower())
+
     @classmethod
     def setUpClass(cls):
         cls.rerank = load_rerank_module()
@@ -121,9 +134,7 @@ class ColabWorkflowTests(unittest.TestCase):
             root = Path(directory)
             archive = root / "cellvit-model.zip"
             with zipfile.ZipFile(archive, "w") as handle:
-                handle.writestr(
-                    "nested/CellViT-256-x40-AMP.pth", b"checkpoint"
-                )
+                handle.writestr("nested/CellViT-256-x40-AMP.pth", b"checkpoint")
             args = Namespace(
                 cellvit_model=archive,
                 cellvit_model_name="CellViT-256-x40-AMP.pth",
@@ -160,9 +171,7 @@ class ColabWorkflowTests(unittest.TestCase):
     def test_rerank_has_focused_green_seed_configs(self):
         configs = self.rerank.DEFAULT_CONFIGS
         self.assertEqual(len(configs), 2)
-        self.assertEqual(
-            self.rerank.DEFAULT_SEEDS_PER_CONFIG * len(configs), 16
-        )
+        self.assertEqual(self.rerank.DEFAULT_SEEDS_PER_CONFIG * len(configs), 16)
         self.assertEqual({config.green_sd for config in configs}, {-1.0, 0.0})
         self.assertEqual({config.controlnet_strength for config in configs}, {2.0})
         self.assertEqual({config.denoising_steps for config in configs}, {30})
@@ -214,7 +223,9 @@ class ColabWorkflowTests(unittest.TestCase):
                 return real_open(*args, **kwargs)
 
             with (
-                patch("experiments.fidelity.workflow.Image.open", side_effect=flaky_open),
+                patch(
+                    "experiments.fidelity.workflow.Image.open", side_effect=flaky_open
+                ),
                 patch("experiments.fidelity.workflow.time.sleep"),
             ):
                 loaded = load_rgb_with_retry(image_path, attempts=2)
@@ -233,8 +244,7 @@ class ColabWorkflowTests(unittest.TestCase):
                 for candidate in range(configs * seeds)
             ]
             selection_rows = [
-                {"stem": stem, "selected_image": f"{stem}.png"}
-                for stem in stems[:2]
+                {"stem": stem, "selected_image": f"{stem}.png"} for stem in stems[:2]
             ]
             pd.DataFrame(score_rows).to_csv(root / "candidate_scores.csv", index=False)
             pd.DataFrame(selection_rows).to_csv(
@@ -310,7 +320,9 @@ class ColabWorkflowTests(unittest.TestCase):
                 capture_output=True,
                 text=True,
             )
-            manifest = json.loads((paths.output_root / "suite_commands.json").read_text())
+            manifest = json.loads(
+                (paths.output_root / "suite_commands.json").read_text()
+            )
             self.assertEqual(len(manifest["commands"]), 3)
             self.assertIn("02_morphology_fidelity.py", result.stdout)
             self.assertIn("04_spatial_coordinate_fidelity.py", result.stdout)

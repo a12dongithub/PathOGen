@@ -127,6 +127,10 @@ Install the additional evaluators after pulling the branch:
 pip install -r experiments/requirements_tables.txt
 ```
 
+This requirements file includes the legacy packages imported by the official
+HoVer-Net tile runner (`imgaug`, `future`, scikit-learn, TensorBoardX, and
+termcolor) while retaining versions compatible with the Colab runtime.
+
 Then run a no-model validation:
 
 ```bash
