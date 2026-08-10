@@ -30,7 +30,7 @@ from experiments.colab.setup_colab import (
 )
 from experiments.fidelity.constants import MORPH_FEATURES
 from experiments.fidelity.data import CellObservation
-from experiments.fidelity.workflow import load_rgb_with_retry
+from experiments.fidelity.workflow import load_rgb_with_retry, path_is_file_with_retry
 
 
 def load_rerank_module():
@@ -231,6 +231,19 @@ class ColabWorkflowTests(unittest.TestCase):
                 loaded = load_rgb_with_retry(image_path, attempts=2)
             self.assertEqual(loaded.getpixel((0, 0)), (12, 34, 56))
             self.assertEqual(calls, 2)
+
+    def test_drive_stat_retries_transient_oserror(self):
+        path = Path("transient-drive-file")
+        with (
+            patch.object(
+                Path,
+                "is_file",
+                side_effect=[OSError(5, "Input/output error"), True],
+            ) as is_file,
+            patch("experiments.fidelity.workflow.time.sleep"),
+        ):
+            self.assertTrue(path_is_file_with_retry(path, attempts=2))
+        self.assertEqual(is_file.call_count, 2)
 
     def test_rerank_progress_resumes_complete_prefix(self):
         with tempfile.TemporaryDirectory() as directory:

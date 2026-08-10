@@ -97,6 +97,54 @@ def write_json(path: Path, payload: Any) -> None:
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
+def path_is_file_with_retry(
+    path: Path, attempts: int = 6, initial_delay: float = 0.5
+) -> bool:
+    """Check a path while tolerating transient mounted-Drive stat failures."""
+    last_error: OSError | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            return path.is_file()
+        except OSError as error:
+            last_error = error
+            if attempt == attempts:
+                break
+            delay = min(initial_delay * (2 ** (attempt - 1)), 8.0)
+            print(
+                f"[io] Stat failed for {path} ({error}); retry "
+                f"{attempt + 1}/{attempts} in {delay:.1f}s",
+                flush=True,
+            )
+            time.sleep(delay)
+    raise OSError(
+        f"Could not stat path after {attempts} attempts: {path}"
+    ) from last_error
+
+
+def read_text_with_retry(
+    path: Path, attempts: int = 6, initial_delay: float = 0.5
+) -> str:
+    """Read UTF-8 text while tolerating transient mounted-Drive failures."""
+    last_error: OSError | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            return path.read_text(encoding="utf-8")
+        except OSError as error:
+            last_error = error
+            if attempt == attempts:
+                break
+            delay = min(initial_delay * (2 ** (attempt - 1)), 8.0)
+            print(
+                f"[io] Text read failed for {path} ({error}); retry "
+                f"{attempt + 1}/{attempts} in {delay:.1f}s",
+                flush=True,
+            )
+            time.sleep(delay)
+    raise OSError(
+        f"Could not read text after {attempts} attempts: {path}"
+    ) from last_error
+
+
 def load_rgb_with_retry(
     path: Path, attempts: int = 6, initial_delay: float = 0.5
 ) -> Image.Image:
@@ -184,10 +232,10 @@ class ExperimentRuntime:
         )
         image_path = self.generated_dir / f"{safe_name(artifact_name)}.png"
         metadata_path = self.metadata_dir / f"{safe_name(artifact_name)}.json"
-        if image_path.is_file() and not self.args.overwrite:
+        if path_is_file_with_retry(image_path) and not self.args.overwrite:
             metadata = (
-                json.loads(metadata_path.read_text(encoding="utf-8"))
-                if metadata_path.is_file()
+                json.loads(read_text_with_retry(metadata_path))
+                if path_is_file_with_retry(metadata_path)
                 else {}
             )
             return image_path, metadata
@@ -249,10 +297,10 @@ class ExperimentRuntime:
         for index, name in enumerate(artifact_names):
             image_path = self.generated_dir / f"{safe_name(name)}.png"
             metadata_path = self.metadata_dir / f"{safe_name(name)}.json"
-            if image_path.is_file() and not self.args.overwrite:
+            if path_is_file_with_retry(image_path) and not self.args.overwrite:
                 metadata = (
-                    json.loads(metadata_path.read_text(encoding="utf-8"))
-                    if metadata_path.is_file()
+                    json.loads(read_text_with_retry(metadata_path))
+                    if path_is_file_with_retry(metadata_path)
                     else {}
                 )
                 outputs[index] = (image_path, metadata)
@@ -305,7 +353,7 @@ class ExperimentRuntime:
 
     def ensure_cellvit(self, image_path: Path, artifact_name: str) -> Path:
         geojson_path = self.cellvit_dir / f"{safe_name(artifact_name)}.geojson"
-        if geojson_path.is_file() and not self.args.overwrite:
+        if path_is_file_with_retry(geojson_path) and not self.args.overwrite:
             return geojson_path
         if self.args.analysis_only:
             raise FileNotFoundError(
@@ -325,7 +373,7 @@ class ExperimentRuntime:
         missing_indices = []
         for index, name in enumerate(artifact_names):
             geojson_path = self.cellvit_dir / f"{safe_name(name)}.geojson"
-            if geojson_path.is_file() and not self.args.overwrite:
+            if path_is_file_with_retry(geojson_path) and not self.args.overwrite:
                 outputs[index] = geojson_path
             else:
                 missing_indices.append(index)

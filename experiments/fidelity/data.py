@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import random
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -57,7 +58,24 @@ def _feature_iter(payload: object) -> list[dict]:
 
 
 def load_cells(path: Path) -> list[CellObservation]:
-    payload = json.loads(path.read_text(encoding="utf-8"))
+    last_error: OSError | None = None
+    for attempt in range(1, 7):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            break
+        except OSError as error:
+            last_error = error
+            if attempt == 6:
+                raise OSError(
+                    f"Could not read GeoJSON after 6 attempts: {path}"
+                ) from last_error
+            delay = min(0.5 * (2 ** (attempt - 1)), 8.0)
+            print(
+                f"[io] GeoJSON read failed for {path} ({error}); retry "
+                f"{attempt + 1}/6 in {delay:.1f}s",
+                flush=True,
+            )
+            time.sleep(delay)
     cells: list[CellObservation] = []
     for feature in _feature_iter(payload):
         properties = feature.get("properties", {})
@@ -88,7 +106,9 @@ def load_cells(path: Path) -> list[CellObservation]:
                     cell_type=cell_type,
                     centroid=centroid,
                     contour=contour,
-                    type_probability=float(probability) if probability is not None else None,
+                    type_probability=float(probability)
+                    if probability is not None
+                    else None,
                 )
             )
     return cells
@@ -104,7 +124,9 @@ class DatasetCatalog:
         self.geojson_dir = self.data_dir / "geojsons"
         for directory in (self.image_dir, self.spatial_dir, self.geojson_dir):
             if not directory.is_dir():
-                raise FileNotFoundError(f"Required dataset directory missing: {directory}")
+                raise FileNotFoundError(
+                    f"Required dataset directory missing: {directory}"
+                )
 
         self.morphology_path = morphology_file(self.data_dir)
         frame = pd.read_parquet(self.morphology_path)
@@ -129,7 +151,9 @@ class DatasetCatalog:
         if not self.stems:
             raise RuntimeError(f"No fully aligned cases found under {self.data_dir}")
 
-    def select(self, count: int, seed: int, requested: list[str] | None = None) -> list[str]:
+    def select(
+        self, count: int, seed: int, requested: list[str] | None = None
+    ) -> list[str]:
         if count < 1:
             raise ValueError("num_images must be positive")
         if requested:
@@ -137,7 +161,9 @@ class DatasetCatalog:
             if unknown:
                 raise KeyError(f"Unknown or incomplete requested stems: {unknown}")
             if count > len(requested):
-                raise ValueError("num_images exceeds the number of explicitly requested stems")
+                raise ValueError(
+                    "num_images exceeds the number of explicitly requested stems"
+                )
             return requested[:count]
         rng = random.Random(seed)
         return rng.sample(self.stems, min(count, len(self.stems)))
@@ -185,8 +211,12 @@ class DatasetCatalog:
                 "median_value": [quantiles.loc[0.5, name] for name in MORPH_FEATURES],
                 "upper_quantile": upper,
                 "upper_value": [quantiles.loc[upper, name] for name in MORPH_FEATURES],
-                "observed_min": [self.morphology[name].min() for name in MORPH_FEATURES],
-                "observed_max": [self.morphology[name].max() for name in MORPH_FEATURES],
+                "observed_min": [
+                    self.morphology[name].min() for name in MORPH_FEATURES
+                ],
+                "observed_max": [
+                    self.morphology[name].max() for name in MORPH_FEATURES
+                ],
             }
         )
 
@@ -220,7 +250,9 @@ class DatasetCatalog:
 
         changed = np.asarray(vector, dtype=np.float32).copy()
         changed[index] = target
-        changed_indices = np.flatnonzero(~np.isclose(changed, vector, rtol=0, atol=1e-7))
+        changed_indices = np.flatnonzero(
+            ~np.isclose(changed, vector, rtol=0, atol=1e-7)
+        )
         if changed_indices.tolist() != [index]:
             raise AssertionError(
                 f"Intervention must change only {feature}; changed indices={changed_indices.tolist()}"

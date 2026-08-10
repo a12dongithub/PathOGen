@@ -17,7 +17,7 @@ import numpy as np
 from .cellvit import CellViTRunner
 from .constants import CELL_COLORS, CELL_TYPES
 from .data import CellObservation
-from .workflow import load_rgb_with_retry
+from .workflow import load_rgb_with_retry, path_is_file_with_retry
 
 PANNUKE_TYPE_MAP = {
     1: "Neoplastic",
@@ -112,9 +112,9 @@ def ensure_cellvit_predictions(
     for artifact_id in images:
         reusable = existing.get(artifact_id)
         destination = output_dir / f"{artifact_id}.geojson"
-        if reusable is not None and reusable.is_file() and not overwrite:
+        if reusable is not None and path_is_file_with_retry(reusable) and not overwrite:
             outputs[artifact_id] = reusable
-        elif destination.is_file() and not overwrite:
+        elif path_is_file_with_retry(destination) and not overwrite:
             outputs[artifact_id] = destination
         else:
             missing.append(artifact_id)
@@ -179,7 +179,7 @@ def ensure_stardist_predictions(
     missing = []
     for artifact_id in images:
         destination = output_dir / f"{artifact_id}.geojson"
-        if destination.is_file() and not overwrite:
+        if path_is_file_with_retry(destination) and not overwrite:
             outputs[artifact_id] = destination
         else:
             missing.append(artifact_id)
@@ -264,7 +264,7 @@ def _locate_hovernet_raw(root: Path, artifact_id: str) -> Path | None:
         root / f"{artifact_id}.json",
     )
     for path in direct:
-        if path.is_file():
+        if path_is_file_with_retry(path):
             return path
     matches = list(root.rglob(f"{artifact_id}.json")) if root.is_dir() else []
     return matches[0] if matches else None
@@ -288,7 +288,7 @@ def ensure_hovernet_predictions(
     missing = []
     for artifact_id in images:
         destination = output_dir / f"{artifact_id}.geojson"
-        if destination.is_file() and not overwrite:
+        if path_is_file_with_retry(destination) and not overwrite:
             outputs[artifact_id] = destination
         else:
             missing.append(artifact_id)
@@ -320,7 +320,7 @@ def ensure_hovernet_predictions(
         raise FileNotFoundError(
             f"HoVer-Net source missing: {project_root / 'run_infer.py'}"
         )
-    if not model_path.is_file():
+    if not path_is_file_with_retry(model_path):
         raise FileNotFoundError(f"HoVer-Net checkpoint missing: {model_path}")
 
     pending_images = {artifact_id: images[artifact_id] for artifact_id in unresolved}

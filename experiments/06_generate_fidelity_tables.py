@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import random
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -36,6 +37,7 @@ from experiments.fidelity.table_metrics import (
 from experiments.fidelity.workflow import (
     ExperimentRuntime,
     load_rgb_with_retry,
+    path_is_file_with_retry,
     write_json,
 )
 
@@ -157,16 +159,37 @@ def parse_args() -> argparse.Namespace:
 def _resolve_saved_path(raw: object, candidates: list[Path]) -> Path | None:
     if raw is not None and not pd.isna(raw):
         path = Path(str(raw)).expanduser()
-        if path.is_file():
-            return path.resolve()
+        if path_is_file_with_retry(path):
+            return path.absolute()
     for candidate in candidates:
-        if candidate.is_file():
-            return candidate.resolve()
+        if path_is_file_with_retry(candidate):
+            return candidate.absolute()
         if raw is not None and not pd.isna(raw):
             joined = candidate / Path(str(raw)).name
-            if joined.is_file():
-                return joined.resolve()
+            if path_is_file_with_retry(joined):
+                return joined.absolute()
     return None
+
+
+def read_csv_with_retry(path: Path, attempts: int = 6) -> pd.DataFrame:
+    last_error: OSError | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            return pd.read_csv(path)
+        except OSError as error:
+            last_error = error
+            if attempt == attempts:
+                break
+            delay = min(0.5 * (2 ** (attempt - 1)), 8.0)
+            print(
+                f"[io] CSV read failed for {path} ({error}); retry "
+                f"{attempt + 1}/{attempts} in {delay:.1f}s",
+                flush=True,
+            )
+            time.sleep(delay)
+    raise OSError(
+        f"Could not read CSV after {attempts} attempts: {path}"
+    ) from last_error
 
 
 def load_selected_cases(
@@ -174,9 +197,9 @@ def load_selected_cases(
 ) -> pd.DataFrame:
     rerank_dir = rerank_dir.expanduser().resolve()
     selections_path = rerank_dir / "selected_candidates.csv"
-    if not selections_path.is_file():
+    if not path_is_file_with_retry(selections_path):
         raise FileNotFoundError(f"Reranking selections missing: {selections_path}")
-    selections = pd.read_csv(selections_path)
+    selections = read_csv_with_retry(selections_path)
     if "stem" not in selections or "seed" not in selections:
         raise ValueError("selected_candidates.csv must contain stem and seed columns")
     selections["stem"] = selections["stem"].astype(str)
@@ -385,8 +408,8 @@ def ensure_measurements(
     save_every: int,
     overwrite: bool,
 ) -> pd.DataFrame:
-    if destination.is_file() and not overwrite:
-        existing = pd.read_csv(destination)
+    if path_is_file_with_retry(destination) and not overwrite:
+        existing = read_csv_with_retry(destination)
     else:
         existing = pd.DataFrame()
     key_column = "plan_id" if controlled_plan is not None else "artifact_id"
