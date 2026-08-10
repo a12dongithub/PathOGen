@@ -16,6 +16,7 @@ from experiments.colab.layout import REPO_ROOT
 from experiments.fidelity.constants import MORPH_FEATURES
 from experiments.fidelity.data import CellObservation, load_cells
 from experiments.fidelity.evaluators import (
+    ensure_hovernet_predictions,
     load_hovernet_json,
     save_observations_geojson,
 )
@@ -97,6 +98,33 @@ class PaperTableTests(unittest.TestCase):
         self.assertEqual(
             [cell.cell_type for cell in cells], ["Neoplastic", "Inflammatory"]
         )
+
+    def test_hovernet_salvages_raw_scratch_before_reinference(self):
+        payload = {
+            "nuc": {
+                "1": {
+                    "type": 1,
+                    "centroid": [20, 30],
+                    "contour": [[18, 28], [22, 28], [22, 32], [18, 32]],
+                }
+            }
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            raw = root / "scratch" / "hovernet_raw" / "json" / "case.json"
+            raw.parent.mkdir(parents=True)
+            raw.write_text(json.dumps(payload), encoding="utf-8")
+            outputs = ensure_hovernet_predictions(
+                {"case": root / "case.png"},
+                root / "predictions",
+                root / "scratch",
+                project_root=None,
+                model_path=None,
+                predictions_dir=None,
+                batch_size=32,
+            )
+            self.assertTrue(outputs["case"].is_file())
+            self.assertEqual(load_cells(outputs["case"])[0].cell_type, "Neoplastic")
 
     def test_spatial_summary_perfect_typed_matching(self):
         pairs = []

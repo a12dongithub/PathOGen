@@ -270,6 +270,32 @@ def _locate_hovernet_raw(root: Path, artifact_id: str) -> Path | None:
     return matches[0] if matches else None
 
 
+def _cache_hovernet_raw_predictions(
+    artifact_ids: list[str], raw_root: Path, output_dir: Path, outputs: dict[str, Path]
+) -> list[str]:
+    """Persist available official JSONs and return IDs still lacking raw output."""
+    unresolved = []
+    cached = 0
+    for artifact_id in artifact_ids:
+        raw = _locate_hovernet_raw(raw_root, artifact_id)
+        if raw is None:
+            unresolved.append(artifact_id)
+            continue
+        destination = output_dir / f"{artifact_id}.geojson"
+        save_observations_geojson(
+            load_hovernet_json(raw), destination, "HoVer-Net PanNuke"
+        )
+        outputs[artifact_id] = destination
+        cached += 1
+    if cached:
+        print(
+            f"[HoVer-Net] persisted {cached} raw predictions; "
+            f"{len(unresolved)} still missing",
+            flush=True,
+        )
+    return unresolved
+
+
 def ensure_hovernet_predictions(
     images: dict[str, Path],
     output_dir: Path,
@@ -294,19 +320,20 @@ def ensure_hovernet_predictions(
             missing.append(artifact_id)
 
     unresolved = []
+    unresolved = missing
     if predictions_dir is not None:
-        for artifact_id in missing:
-            raw = _locate_hovernet_raw(predictions_dir, artifact_id)
-            if raw is None:
-                unresolved.append(artifact_id)
-                continue
-            destination = output_dir / f"{artifact_id}.geojson"
-            save_observations_geojson(
-                load_hovernet_json(raw), destination, "HoVer-Net PanNuke"
-            )
-            outputs[artifact_id] = destination
-    else:
-        unresolved = missing
+        unresolved = _cache_hovernet_raw_predictions(
+            unresolved, predictions_dir, output_dir, outputs
+        )
+
+    # Official HoVer-Net can drop the image that crosses each host-RAM cache
+    # boundary. Salvage every JSON from a previous/failed run before launching it
+    # again, then retry only the boundary cases that are genuinely absent.
+    raw_dir = scratch_dir / "hovernet_raw"
+    if raw_dir.is_dir():
+        unresolved = _cache_hovernet_raw_predictions(
+            unresolved, raw_dir, output_dir, outputs
+        )
 
     if not unresolved:
         return outputs
@@ -323,41 +350,48 @@ def ensure_hovernet_predictions(
     if not path_is_file_with_retry(model_path):
         raise FileNotFoundError(f"HoVer-Net checkpoint missing: {model_path}")
 
-    pending_images = {artifact_id: images[artifact_id] for artifact_id in unresolved}
     stage_dir = scratch_dir / "hovernet_input"
-    raw_dir = scratch_dir / "hovernet_raw"
-    _stage_images(pending_images, stage_dir)
     type_info = scratch_dir / "hovernet_type_info.json"
     _write_hovernet_type_info(type_info)
     compatibility_runner = (
         Path(__file__).resolve().parents[1] / "hovernet_compat_runner.py"
     )
-    command = [
-        sys.executable,
-        str(compatibility_runner),
-        str(project_root),
-        "--gpu=0",
-        "--nr_types=6",
-        f"--type_info_path={type_info}",
-        f"--model_path={model_path}",
-        f"--model_mode={model_mode}",
-        "--nr_inference_workers=0",
-        "--nr_post_proc_workers=0",
-        f"--batch_size={batch_size}",
-        "tile",
-        f"--input_dir={stage_dir}",
-        f"--output_dir={raw_dir}",
-        f"--mem_usage={memory_fraction:g}",
-    ]
-    print(f"[HoVer-Net] processing {len(unresolved)} missing images", flush=True)
-    subprocess.run(command, cwd=project_root, check=True)
-    for artifact_id in unresolved:
-        raw = _locate_hovernet_raw(raw_dir, artifact_id)
-        if raw is None:
-            raise FileNotFoundError(f"HoVer-Net output missing for {artifact_id}")
-        destination = output_dir / f"{artifact_id}.geojson"
-        save_observations_geojson(
-            load_hovernet_json(raw), destination, "HoVer-Net PanNuke"
+    for attempt in range(1, 4):
+        pending_images = {
+            artifact_id: images[artifact_id] for artifact_id in unresolved
+        }
+        _stage_images(pending_images, stage_dir)
+        command = [
+            sys.executable,
+            str(compatibility_runner),
+            str(project_root),
+            "--gpu=0",
+            "--nr_types=6",
+            f"--type_info_path={type_info}",
+            f"--model_path={model_path}",
+            f"--model_mode={model_mode}",
+            "--nr_inference_workers=0",
+            "--nr_post_proc_workers=0",
+            f"--batch_size={batch_size}",
+            "tile",
+            f"--input_dir={stage_dir}",
+            f"--output_dir={raw_dir}",
+            f"--mem_usage={memory_fraction:g}",
+        ]
+        print(
+            f"[HoVer-Net] processing {len(unresolved)} missing images "
+            f"(attempt {attempt}/3)",
+            flush=True,
         )
-        outputs[artifact_id] = destination
+        subprocess.run(command, cwd=project_root, check=True)
+        unresolved = _cache_hovernet_raw_predictions(
+            unresolved, raw_dir, output_dir, outputs
+        )
+        if not unresolved:
+            break
+    if unresolved:
+        preview = ", ".join(unresolved[:3])
+        raise FileNotFoundError(
+            f"HoVer-Net outputs remain missing after 3 focused retries: {preview}"
+        )
     return outputs
