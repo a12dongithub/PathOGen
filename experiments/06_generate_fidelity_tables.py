@@ -73,10 +73,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--cellvit-batch-size", type=int, default=32)
     parser.add_argument("--hovernet-batch-size", type=int, default=32)
     parser.add_argument(
+        "--hovernet-chunk-size",
+        type=int,
+        default=256,
+        help="Images persisted per official HoVer-Net subprocess for resumability",
+    )
+    parser.add_argument(
         "--hovernet-memory-fraction",
         type=float,
         default=0.8,
-        help="Maximum GPU-memory fraction exposed to official HoVer-Net inference",
+        help="Fraction of available host RAM used by official HoVer-Net caching",
     )
     parser.add_argument(
         "--generator-precision", choices=("auto", "fp16", "fp32"), default="auto"
@@ -513,6 +519,8 @@ def main() -> None:
         raise ValueError("bootstrap must be non-negative and save-every positive")
     if not 0 < args.hovernet_memory_fraction <= 1:
         raise ValueError("hovernet-memory-fraction must be in (0, 1]")
+    if args.hovernet_chunk_size < 1:
+        raise ValueError("hovernet-chunk-size must be positive")
 
     args.data_dir = args.data_dir.expanduser().resolve()
     args.rerank_dir = args.rerank_dir.expanduser().resolve()
@@ -566,6 +574,7 @@ def main() -> None:
             "evaluators": list(args.evaluators),
             "generator_memory_mode": args.generator_memory_mode,
             "hovernet_memory_fraction": args.hovernet_memory_fraction,
+            "hovernet_chunk_size": args.hovernet_chunk_size,
             "random_tile": "fixed one-to-one real-tile pairing from another patient; source GeoJSON reused",
             "centroid_matching": {
                 "radii_pixels": [25, 50],
@@ -650,6 +659,7 @@ def main() -> None:
             args.hovernet_model_mode,
             args.overwrite,
             memory_fraction=args.hovernet_memory_fraction,
+            chunk_size=args.hovernet_chunk_size,
         )
         controlled_predictions = ensure_hovernet_predictions(
             controlled_images,
@@ -662,6 +672,7 @@ def main() -> None:
             args.hovernet_model_mode,
             args.overwrite,
             memory_fraction=args.hovernet_memory_fraction,
+            chunk_size=args.hovernet_chunk_size,
         )
         all_prediction_sets["HoVer-Net"] = (
             selected_predictions,

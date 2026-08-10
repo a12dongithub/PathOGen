@@ -223,6 +223,7 @@ If the dry run passes, run the complete resumable pipeline:
   --generation-batch-size 32 \
   --cellvit-batch-size 32 \
   --hovernet-batch-size 32 \
+  --hovernet-chunk-size 256 \
   --generator-memory-mode throughput \
   --hovernet-memory-fraction 0.8 \
   --bootstrap 1000 \

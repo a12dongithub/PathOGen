@@ -161,8 +161,9 @@ mode: attention slicing and sliced/tiled VAE decoding are disabled, and CUDA OOM
 automatically halves the requested generation batch. Each diffusion batch logs
 its actual size and peak allocated/reserved VRAM. Use
 `--generator-memory-mode balanced` only when throughput mode repeatedly falls
-back. HoVer-Net defaults to `--hovernet-memory-fraction 0.8`; StarDist's official
-`predict_instances` path remains single-image inference.
+back. HoVer-Net defaults to 256-image resumable chunks and uses
+`--hovernet-memory-fraction 0.8` for its host-RAM image cache; StarDist's
+official `predict_instances` path remains single-image inference.
 
 ## Complete Colab workflow
 

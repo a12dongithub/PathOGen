@@ -126,6 +126,66 @@ class PaperTableTests(unittest.TestCase):
             self.assertTrue(outputs["case"].is_file())
             self.assertEqual(load_cells(outputs["case"])[0].cell_type, "Neoplastic")
 
+    def test_hovernet_persists_resumable_chunks(self):
+        payload = {
+            "nuc": {
+                "1": {
+                    "type": 1,
+                    "centroid": [20, 30],
+                    "contour": [[18, 28], [22, 28], [22, 32], [18, 32]],
+                }
+            }
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            project = root / "hover_net"
+            project.mkdir()
+            (project / "run_infer.py").touch()
+            model = root / "model.tar"
+            model.touch()
+            images = {name: root / f"{name}.png" for name in ("a", "b", "c")}
+            for path in images.values():
+                path.touch()
+
+            def fake_run(command, **_kwargs):
+                input_dir = Path(
+                    next(
+                        value.split("=", 1)[1]
+                        for value in command
+                        if value.startswith("--input_dir=")
+                    )
+                )
+                output_dir = Path(
+                    next(
+                        value.split("=", 1)[1]
+                        for value in command
+                        if value.startswith("--output_dir=")
+                    )
+                )
+                json_dir = output_dir / "json"
+                json_dir.mkdir(parents=True, exist_ok=True)
+                for staged in input_dir.iterdir():
+                    (json_dir / f"{staged.stem}.json").write_text(
+                        json.dumps(payload), encoding="utf-8"
+                    )
+
+            with patch(
+                "experiments.fidelity.evaluators.subprocess.run",
+                side_effect=fake_run,
+            ) as run:
+                outputs = ensure_hovernet_predictions(
+                    images,
+                    root / "predictions",
+                    root / "scratch",
+                    project_root=project,
+                    model_path=model,
+                    predictions_dir=None,
+                    batch_size=32,
+                    chunk_size=2,
+                )
+            self.assertEqual(set(outputs), set(images))
+            self.assertEqual(run.call_count, 2)
+
     def test_spatial_summary_perfect_typed_matching(self):
         pairs = []
         for index in range(4):

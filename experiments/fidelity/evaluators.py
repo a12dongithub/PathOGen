@@ -307,9 +307,12 @@ def ensure_hovernet_predictions(
     model_mode: str = "fast",
     overwrite: bool = False,
     memory_fraction: float = 0.8,
+    chunk_size: int = 256,
 ) -> dict[str, Path]:
     if not 0 < memory_fraction <= 1:
         raise ValueError("HoVer-Net memory_fraction must be in (0, 1]")
+    if chunk_size < 1:
+        raise ValueError("HoVer-Net chunk_size must be positive")
     outputs = {}
     missing = []
     for artifact_id in images:
@@ -319,7 +322,6 @@ def ensure_hovernet_predictions(
         else:
             missing.append(artifact_id)
 
-    unresolved = []
     unresolved = missing
     if predictions_dir is not None:
         unresolved = _cache_hovernet_raw_predictions(
@@ -356,42 +358,48 @@ def ensure_hovernet_predictions(
     compatibility_runner = (
         Path(__file__).resolve().parents[1] / "hovernet_compat_runner.py"
     )
-    for attempt in range(1, 4):
-        pending_images = {
-            artifact_id: images[artifact_id] for artifact_id in unresolved
-        }
-        _stage_images(pending_images, stage_dir)
-        command = [
-            sys.executable,
-            str(compatibility_runner),
-            str(project_root),
-            "--gpu=0",
-            "--nr_types=6",
-            f"--type_info_path={type_info}",
-            f"--model_path={model_path}",
-            f"--model_mode={model_mode}",
-            "--nr_inference_workers=0",
-            "--nr_post_proc_workers=0",
-            f"--batch_size={batch_size}",
-            "tile",
-            f"--input_dir={stage_dir}",
-            f"--output_dir={raw_dir}",
-            f"--mem_usage={memory_fraction:g}",
-        ]
-        print(
-            f"[HoVer-Net] processing {len(unresolved)} missing images "
-            f"(attempt {attempt}/3)",
-            flush=True,
-        )
-        subprocess.run(command, cwd=project_root, check=True)
-        unresolved = _cache_hovernet_raw_predictions(
-            unresolved, raw_dir, output_dir, outputs
-        )
-        if not unresolved:
-            break
-    if unresolved:
-        preview = ", ".join(unresolved[:3])
-        raise FileNotFoundError(
-            f"HoVer-Net outputs remain missing after 3 focused retries: {preview}"
-        )
+    chunks = [
+        unresolved[start : start + chunk_size]
+        for start in range(0, len(unresolved), chunk_size)
+    ]
+    for chunk_index, chunk in enumerate(chunks, start=1):
+        chunk_unresolved = chunk
+        for attempt in range(1, 4):
+            pending_images = {
+                artifact_id: images[artifact_id] for artifact_id in chunk_unresolved
+            }
+            _stage_images(pending_images, stage_dir)
+            command = [
+                sys.executable,
+                str(compatibility_runner),
+                str(project_root),
+                "--gpu=0",
+                "--nr_types=6",
+                f"--type_info_path={type_info}",
+                f"--model_path={model_path}",
+                f"--model_mode={model_mode}",
+                "--nr_inference_workers=0",
+                "--nr_post_proc_workers=0",
+                f"--batch_size={batch_size}",
+                "tile",
+                f"--input_dir={stage_dir}",
+                f"--output_dir={raw_dir}",
+                f"--mem_usage={memory_fraction:g}",
+            ]
+            print(
+                f"[HoVer-Net] chunk {chunk_index}/{len(chunks)}: processing "
+                f"{len(chunk_unresolved)} images (attempt {attempt}/3)",
+                flush=True,
+            )
+            subprocess.run(command, cwd=project_root, check=True)
+            chunk_unresolved = _cache_hovernet_raw_predictions(
+                chunk_unresolved, raw_dir, output_dir, outputs
+            )
+            if not chunk_unresolved:
+                break
+        if chunk_unresolved:
+            preview = ", ".join(chunk_unresolved[:3])
+            raise FileNotFoundError(
+                f"HoVer-Net outputs remain missing after 3 focused retries: {preview}"
+            )
     return outputs
