@@ -64,6 +64,7 @@ class ProgressUploader:
             "error": None,
         }
         self._lock = threading.Lock()
+        self._status_write_lock = threading.Lock()
         self._sync_lock = threading.Lock()
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._loop, daemon=True)
@@ -106,15 +107,17 @@ class ProgressUploader:
         }
 
     def _write_status(self) -> None:
-        with self._lock:
-            payload = dict(self._state)
-        payload.update(self._counts())
-        payload["updated_at"] = datetime.now(timezone.utc).isoformat()
-        temporary = self.status_path.with_suffix(".json.tmp")
-        temporary.write_text(
-            json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-        )
-        temporary.replace(self.status_path)
+        with self._status_write_lock:
+            with self._lock:
+                payload = dict(self._state)
+            payload.update(self._counts())
+            payload["updated_at"] = datetime.now(timezone.utc).isoformat()
+            temporary = self.status_path.with_suffix(".json.tmp")
+            temporary.write_text(
+                json.dumps(payload, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            temporary.replace(self.status_path)
 
     def sync(self) -> None:
         with self._sync_lock:

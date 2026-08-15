@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from concurrent.futures import ThreadPoolExecutor
+from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 
 import pandas as pd
@@ -17,6 +19,18 @@ from experiments.spatial.inflammatory_signal_mass import (
     INFLAMMATORY_CHANNEL,
     _increase_clamped_mass,
 )
+
+REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+
+
+def _cloud_run_module():
+    path = REPOSITORY_ROOT / "workflows/05_generate_counterfactuals/cloud_run.py"
+    spec = spec_from_file_location("cpathogen_cloud_run", path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Cannot load cloud runner: {path}")
+    module = module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 class CandidateManifestTests(unittest.TestCase):
@@ -70,6 +84,24 @@ class InflammatoryMassTests(unittest.TestCase):
         self.assertTrue(torch.equal(converted, torch.ones(4, 4)))
         self.assertTrue(details["target_clipped"])
         self.assertEqual(details["achieved_fraction"], 0.0)
+
+
+class ProgressUploaderTests(unittest.TestCase):
+    def test_concurrent_status_writes_are_atomic(self) -> None:
+        cloud_run = _cloud_run_module()
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            uploader = cloud_run.ProgressUploader(
+                workspace=workspace,
+                outputs=workspace / "outputs",
+                output_uri="gs://unused/test",
+                interval_seconds=60,
+            )
+            with ThreadPoolExecutor(max_workers=8) as pool:
+                list(pool.map(lambda _: uploader._write_status(), range(100)))
+            status = pd.read_json(uploader.status_path, typ="series")
+        self.assertEqual(status["phase"], "starting")
+        self.assertEqual(status["generated_png_count"], 0)
 
 
 if __name__ == "__main__":
