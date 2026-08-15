@@ -9,7 +9,7 @@ import json
 import shutil
 import tempfile
 import zipfile
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
@@ -196,7 +196,7 @@ def main() -> None:
 
         metadata = {
             "schema_version": 1,
-            "created_at": datetime.now(UTC).isoformat(),
+            "created_at": datetime.now(timezone.utc).isoformat(),
             "selection": {
                 "source": str(args.selected_candidates.expanduser().resolve()),
                 "source_sha256": _sha256(args.selected_candidates),
@@ -240,7 +240,7 @@ def main() -> None:
             json.dumps(
                 {
                     "schema_version": 1,
-                    "created_at": datetime.now(UTC).isoformat(),
+                    "created_at": datetime.now(timezone.utc).isoformat(),
                     "files": checkpoint_files,
                 },
                 indent=2,

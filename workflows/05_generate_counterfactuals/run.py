@@ -11,7 +11,7 @@ import json
 import random
 import subprocess
 import sys
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -262,7 +262,7 @@ def _difference_summary(
 
 
 def _default_output_dir() -> Path:
-    timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     return REPOSITORY_ROOT / "data/evaluations" / f"counterfactual_{timestamp}"
 
 
@@ -297,7 +297,7 @@ def main() -> None:
     manifest: dict[str, Any] = {
         "schema_version": 1,
         "status": "dry_run" if args.dry_run else "running",
-        "created_at": datetime.now(UTC).isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
         "repository": _git_metadata(),
         "versions": _versions(),
         "experiment": {
@@ -392,7 +392,7 @@ def main() -> None:
             }
             for candidate in candidates
         }
-        manifest["completed_at"] = datetime.now(UTC).isoformat()
+        manifest["completed_at"] = datetime.now(timezone.utc).isoformat()
         _json_write(output_dir / "run_manifest.json", manifest)
         print(f"Dry run validated {len(interventions)} intervention(s): {output_dir}")
         return
@@ -506,7 +506,7 @@ def main() -> None:
             torch.cuda.empty_cache()
 
     manifest["status"] = "completed"
-    manifest["completed_at"] = datetime.now(UTC).isoformat()
+    manifest["completed_at"] = datetime.now(timezone.utc).isoformat()
     manifest["pair_count"] = pair_count
     manifest["image_count"] = image_count
     manifest["pairs_manifest"] = str(pairs_path)

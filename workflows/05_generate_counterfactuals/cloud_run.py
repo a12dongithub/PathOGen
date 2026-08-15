@@ -11,7 +11,7 @@ import subprocess
 import sys
 import threading
 import zipfile
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -60,7 +60,7 @@ class ProgressUploader:
         self.status_path = workspace / "status.json"
         self._state: dict[str, Any] = {
             "phase": "starting",
-            "started_at": datetime.now(UTC).isoformat(),
+            "started_at": datetime.now(timezone.utc).isoformat(),
             "error": None,
         }
         self._lock = threading.Lock()
@@ -109,7 +109,7 @@ class ProgressUploader:
         with self._lock:
             payload = dict(self._state)
         payload.update(self._counts())
-        payload["updated_at"] = datetime.now(UTC).isoformat()
+        payload["updated_at"] = datetime.now(timezone.utc).isoformat()
         temporary = self.status_path.with_suffix(".json.tmp")
         temporary.write_text(
             json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
@@ -253,12 +253,14 @@ def main() -> None:
             command.append("--dry-run")
         uploader.update("generating")
         _run(command)
-        uploader.update("completed", completed_at=datetime.now(UTC).isoformat())
+        uploader.update(
+            "completed", completed_at=datetime.now(timezone.utc).isoformat()
+        )
         uploader.sync()
     except Exception as error:
         uploader.update(
             "failed",
-            failed_at=datetime.now(UTC).isoformat(),
+            failed_at=datetime.now(timezone.utc).isoformat(),
             error=f"{type(error).__name__}: {error}",
         )
         try:
