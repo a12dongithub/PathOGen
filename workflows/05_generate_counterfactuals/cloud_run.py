@@ -23,6 +23,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--data-uri", required=True)
     parser.add_argument("--checkpoint-uri", required=True)
     parser.add_argument("--output-uri", required=True)
+    parser.add_argument(
+        "--experiment",
+        default="experiments.spatial.inflammatory_signal_mass",
+    )
     parser.add_argument("--workspace", type=Path, default=Path("/mnt/disks/cpathogen"))
     parser.add_argument("--data-sha256")
     parser.add_argument("--checkpoint-sha256")
@@ -232,7 +236,7 @@ def main() -> None:
             sys.executable,
             str(REPOSITORY_ROOT / "workflows/05_generate_counterfactuals/run.py"),
             "--experiment",
-            "experiments.spatial.inflammatory_signal_mass",
+            args.experiment,
             "--data-root",
             str(data_root),
             "--candidate-manifest",

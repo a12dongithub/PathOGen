@@ -112,24 +112,25 @@ The real H&E tile is recorded as a reference path in `pairs.jsonl`; it is not an
 input to this noise-to-image Phase-2 checkpoint. See `docs/` for the study
 protocol and model/data contract.
 
-## Inflammatory-signal mass experiment on Google Cloud
+## Inflammatory-centroid density experiment on Google Cloud
 
-The experiment `experiments.spatial.inflammatory_signal_mass` defines four
-prespecified conditions: baseline, +10%, +20%, and +30% inflammatory signal
-mass. It changes only spatial channel 1 (`inflammatory`) and preserves the
-morphology vector and selected diffusion seed.
+The experiment `experiments.spatial.inflammatory_centroid_density` defines
+baseline, +0.5 SD, +1.0 SD, and +1.5 SD conditions in square-root transformed
+inflammatory-nucleus count. It adds deterministic nested centroids near the
+original inflammatory distribution, then rebuilds channel 1 with the original
+impulse, Gaussian sigma 3, peak-normalization, and uint8 preprocessing. Other
+spatial channels, morphology, and the selected diffusion seed remain fixed.
 
-Build two portable Zip64 archives locally. The data archive contains exactly
-1,000 neutral-green candidates with nonzero baseline inflammatory signal,
-selected deterministically by `spatial_score`; their matching five-channel
-maps; their 16-value morphology rows; checksums; and the canonical
-candidate-to-seed manifest. The model archive contains the complete Phase-2
-checkpoint.
+The default cohort is the top 300 neutral-green controls with at least 10
+inflammatory nuclei. Its reference SD is fitted over all neutral-green controls
+with positive inflammatory count and stored in `cell_centroids/reference_stats.json`.
+The builder verifies that every extracted centroid control exactly reproduces
+the stored baseline inflammatory map.
 
 ```bash
-uv run --extra inference python workflows/05_generate_counterfactuals/build_artifacts.py \
-  --checkpoint ../refactored/models/pathogen_phase2/checkpoint_30000 \
-  --output-dir artifacts/inflammatory_mass_v1
+uv run --extra inference python workflows/05_generate_counterfactuals/build_centroid_data.py \
+  --geojson-dir ../refactored/data/geojsons \
+  --output-dir artifacts/inflammatory_centroid_density_sd_v1
 ```
 
 On a CUDA VM with this repository cloned and `gcloud` authenticated, run one
@@ -140,10 +141,11 @@ extracting it.
 ```bash
 uv sync --extra inference
 uv run python workflows/05_generate_counterfactuals/cloud_run.py \
-  --data-uri gs://cpathogen_artifacts/inputs/inflammatory_mass_v1/cpathogen_inflammatory_mass_1000_data.zip \
+  --experiment experiments.spatial.inflammatory_centroid_density \
+  --data-uri gs://cpathogen_artifacts/inputs/inflammatory_centroid_density_sd_v1/cpathogen_inflammatory_centroid_density_300_data.zip \
   --checkpoint-uri gs://cpathogen_artifacts/models/pathogen_phase2_checkpoint_30000.zip \
-  --output-uri gs://cpathogen_artifacts/outputs/inflammatory_mass_v1/shard_00 \
-  --workspace /mnt/disks/cpathogen --shard-index 0 --num-shards 1
+  --output-uri gs://cpathogen_artifacts/outputs/inflammatory_centroid_density_sd_v1 \
+  --workspace "$HOME/cpathogen-workspace" --shard-index 0 --num-shards 1
 ```
 
 For multiple VMs, give each a distinct `--shard-index` in

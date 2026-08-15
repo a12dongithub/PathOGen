@@ -1,6 +1,14 @@
 """Counterfactual intervention and matched-pair utilities."""
 
 from .candidates import CandidateRecord, load_candidate_manifest, select_candidate_shard
+from .centroids import (
+    add_jittered_centroids,
+    inflammatory_centroids_from_geojson,
+    load_centroid_reference_stats,
+    load_inflammatory_centroids,
+    render_centroid_channel,
+    sd_target_count,
+)
 from .conditions import (
     CELL_TYPE_NAMES,
     MORPHOLOGY_FEATURE_NAMES,
@@ -27,8 +35,14 @@ __all__ = [
     "IdentityIntervention",
     "InterventionContext",
     "MatchedPairRecord",
+    "add_jittered_centroids",
+    "inflammatory_centroids_from_geojson",
     "load_candidate_manifest",
+    "load_centroid_reference_stats",
+    "load_inflammatory_centroids",
     "load_interventions",
+    "render_centroid_channel",
+    "sd_target_count",
     "select_candidate_shard",
     "select_interventions",
 ]
