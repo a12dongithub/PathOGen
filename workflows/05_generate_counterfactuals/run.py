@@ -261,6 +261,33 @@ def _difference_summary(
     }
 
 
+def _apply_interventions(
+    *,
+    original: ConditionBundle,
+    candidate: CandidateRecord,
+    interventions: list[Any],
+    store: ConditionStore,
+    intervention_seed: int,
+) -> list[tuple[Any, Any, dict[str, Any]]]:
+    applied_items = []
+    for intervention in interventions:
+        context = InterventionContext(
+            store=store,
+            original_stem=candidate.stem,
+            intervention_seed=intervention_seed,
+            generation_seed=candidate.seed,
+        )
+        applied = intervention.apply(original, context)
+        applied_items.append(
+            (
+                intervention,
+                applied,
+                _difference_summary(original, applied.condition),
+            )
+        )
+    return applied_items
+
+
 def _default_output_dir() -> Path:
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     return REPOSITORY_ROOT / "data/evaluations" / f"counterfactual_{timestamp}"
@@ -353,30 +380,18 @@ def main() -> None:
     }
     _json_write(output_dir / "run_manifest.json", manifest)
 
-    applied_by_candidate: dict[str, list[tuple[Any, Any, dict[str, Any]]]] = {}
-    for candidate in candidates:
-        original = store.load(candidate.stem)
-        applied_items = []
-        for intervention in interventions:
-            context = InterventionContext(
-                store=store,
-                original_stem=candidate.stem,
-                intervention_seed=args.intervention_seed,
-                generation_seed=candidate.seed,
-            )
-            applied = intervention.apply(original, context)
-            applied_items.append(
-                (
-                    intervention,
-                    applied,
-                    _difference_summary(original, applied.condition),
-                )
-            )
-        applied_by_candidate[candidate.candidate_id] = applied_items
-
     if args.dry_run:
-        manifest["dry_run_results"] = {
-            candidate.candidate_id: {
+        dry_run_results = {}
+        for candidate in candidates:
+            original = store.load(candidate.stem)
+            applied_items = _apply_interventions(
+                original=original,
+                candidate=candidate,
+                interventions=interventions,
+                store=store,
+                intervention_seed=args.intervention_seed,
+            )
+            dry_run_results[candidate.candidate_id] = {
                 "stem": candidate.stem,
                 "seed": candidate.seed,
                 "interventions": [
@@ -385,13 +400,10 @@ def main() -> None:
                         "details": applied.details,
                         "difference": difference,
                     }
-                    for intervention, applied, difference in applied_by_candidate[
-                        candidate.candidate_id
-                    ]
+                    for intervention, applied, difference in applied_items
                 ],
             }
-            for candidate in candidates
-        }
+        manifest["dry_run_results"] = dry_run_results
         manifest["completed_at"] = datetime.now(timezone.utc).isoformat()
         _json_write(output_dir / "run_manifest.json", manifest)
         print(f"Dry run validated {len(interventions)} intervention(s): {output_dir}")
@@ -419,7 +431,13 @@ def main() -> None:
         stem = candidate.stem
         seed = candidate.seed
         original = store.load(stem)
-        applied_items = applied_by_candidate[candidate.candidate_id]
+        applied_items = _apply_interventions(
+            original=original,
+            candidate=candidate,
+            interventions=interventions,
+            store=store,
+            intervention_seed=args.intervention_seed,
+        )
         seed_dir = output_dir / "images" / candidate.candidate_id / f"seed_{seed:010d}"
         seed_dir.mkdir(parents=True, exist_ok=True)
         baseline_path = seed_dir / "baseline.png"
