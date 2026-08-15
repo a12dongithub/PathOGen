@@ -177,7 +177,6 @@ def _safe_extract(archive_path: Path, destination: Path) -> None:
 
 def _download(uri: str, destination: Path, expected_sha256: str | None) -> None:
     destination.parent.mkdir(parents=True, exist_ok=True)
-    _run(["gcloud", "storage", "cp", uri, str(destination)])
     sidecar = destination.with_suffix(destination.suffix + ".sha256")
     _run(["gcloud", "storage", "cp", uri + ".sha256", str(sidecar)])
     sidecar_sha256 = sidecar.read_text(encoding="utf-8").split()[0]
@@ -186,6 +185,10 @@ def _download(uri: str, destination: Path, expected_sha256: str | None) -> None:
             f"Requested SHA-256 disagrees with sidecar for {destination.name}"
         )
     expected = expected_sha256 or sidecar_sha256
+    if destination.is_file() and _sha256(destination).lower() == expected.lower():
+        print(f"Reusing verified download: {destination}", flush=True)
+        return
+    _run(["gcloud", "storage", "cp", uri, str(destination)])
     actual = _sha256(destination)
     if actual.lower() != expected.lower():
         raise ValueError(
