@@ -10,6 +10,7 @@ from typing import Any
 class MatchedPairRecord:
     """Provenance for two images generated from the same initial noise."""
 
+    candidate_id: str
     stem: str
     seed: int
     prompt: str

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import hashlib
 import importlib.metadata
 import json
@@ -21,19 +22,20 @@ sys.path.insert(0, str(REPOSITORY_ROOT))
 import torch
 
 from cpathogen.counterfactuals import (
+    CandidateRecord,
     ConditionBundle,
     ConditionStore,
     InterventionContext,
     MatchedPairRecord,
+    load_candidate_manifest,
     load_interventions,
+    select_candidate_shard,
     select_interventions,
 )
 
 DEFAULT_DATA_ROOT = REPOSITORY_ROOT / "data"
 DEFAULT_IMAGES_DIR = REPOSITORY_ROOT / "data/images"
-DEFAULT_CHECKPOINT = (
-    REPOSITORY_ROOT / "models/pathogen_phase2/checkpoint_30000"
-)
+DEFAULT_CHECKPOINT = REPOSITORY_ROOT / "models/pathogen_phase2/checkpoint_30000"
 
 
 def parse_args() -> argparse.Namespace:
@@ -64,6 +66,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--revision")
     parser.add_argument("--local-files-only", action="store_true")
     parser.add_argument("--stem", action="append", dest="stems")
+    parser.add_argument(
+        "--candidate-manifest",
+        type=Path,
+        help="CSV with one candidate_id, stem, and selected seed per generation job.",
+    )
+    parser.add_argument("--shard-index", type=int)
+    parser.add_argument("--num-shards", type=int)
     parser.add_argument("--num-tiles", type=int, default=1)
     parser.add_argument(
         "--all-tiles",
@@ -101,6 +110,14 @@ def parse_args() -> argparse.Namespace:
         parser.error("--num-tiles must be at least 1")
     if args.all_tiles and args.stems:
         parser.error("--all-tiles cannot be combined with --stem")
+    if args.candidate_manifest and (args.all_tiles or args.stems or args.seeds):
+        parser.error(
+            "--candidate-manifest cannot be combined with --all-tiles, --stem, or --seed"
+        )
+    if (args.shard_index is None) != (args.num_shards is None):
+        parser.error("--shard-index and --num-shards must be provided together")
+    if args.shard_index is not None and not args.candidate_manifest:
+        parser.error("Sharding requires --candidate-manifest")
     if args.steps < 1:
         parser.error("--steps must be at least 1")
     if args.spatial_strength < 0:
@@ -121,6 +138,23 @@ def _json_write(path: Path, payload: Any) -> None:
 def _append_jsonl(path: Path, record: dict[str, Any]) -> None:
     with path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(record, sort_keys=True) + "\n")
+
+
+def _append_image_manifest(path: Path, record: dict[str, Any]) -> None:
+    fieldnames = [
+        "candidate_id",
+        "stem",
+        "seed",
+        "condition",
+        "intervention_parameters",
+        "image_path",
+    ]
+    write_header = not path.exists()
+    with path.open("a", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        if write_header:
+            writer.writeheader()
+        writer.writerow(record)
 
 
 def _file_sha256(path: Path) -> str:
@@ -176,6 +210,30 @@ def _select_stems(args: argparse.Namespace, store: ConditionStore) -> list[str]:
     return random.Random(args.sample_seed).sample(list(store.stems), count)
 
 
+def _select_candidates(
+    args: argparse.Namespace, store: ConditionStore
+) -> list[CandidateRecord]:
+    if args.candidate_manifest:
+        candidates = load_candidate_manifest(
+            args.candidate_manifest, available_stems=store.stems
+        )
+        if args.shard_index is not None:
+            candidates = select_candidate_shard(
+                candidates,
+                shard_index=args.shard_index,
+                num_shards=args.num_shards,
+            )
+        return candidates
+
+    stems = _select_stems(args, store)
+    seeds = args.seeds or [42]
+    return [
+        CandidateRecord(candidate_id=f"{stem}__seed_{seed:010d}", stem=stem, seed=seed)
+        for stem in stems
+        for seed in seeds
+    ]
+
+
 def _difference_summary(
     original: ConditionBundle, converted: ConditionBundle
 ) -> dict[str, Any]:
@@ -221,13 +279,13 @@ def main() -> None:
         morphology_table=args.morphology_table,
         images_dir=images_dir,
     )
-    stems = _select_stems(args, store)
-    seeds = args.seeds or [42]
+    candidates = _select_candidates(args, store)
     output_dir = (args.output_dir or _default_output_dir()).expanduser().resolve()
     if output_dir.exists() and any(output_dir.iterdir()):
         raise FileExistsError(f"Output directory is not empty: {output_dir}")
     output_dir.mkdir(parents=True, exist_ok=True)
     pairs_path = output_dir / "pairs.jsonl"
+    images_manifest_path = output_dir / "images.csv"
 
     experiment_path = Path(module.__file__).resolve()
     manifest: dict[str, Any] = {
@@ -248,14 +306,36 @@ def main() -> None:
             "morphology_table": str(store.morphology_table),
             "images_dir": str(store.images_dir),
             "aligned_tile_count": len(store),
-            "selected_stems": stems,
+            "candidate_manifest": (
+                str(args.candidate_manifest.expanduser().resolve())
+                if args.candidate_manifest
+                else None
+            ),
+            "candidate_manifest_sha256": (
+                _file_sha256(args.candidate_manifest.expanduser().resolve())
+                if args.candidate_manifest
+                else None
+            ),
+            "candidate_count": len(candidates),
+            "candidates": [
+                {
+                    "candidate_id": item.candidate_id,
+                    "stem": item.stem,
+                    "seed": item.seed,
+                }
+                for item in candidates
+            ],
+            "shard_index": args.shard_index,
+            "num_shards": args.num_shards,
         },
         "generation": {
             "checkpoint": str(args.checkpoint.expanduser().resolve()),
             "base_model": args.base_model,
             "revision": args.revision,
             "prompt": args.prompt,
-            "seeds": seeds,
+            "seed_source": (
+                "candidate_manifest" if args.candidate_manifest else "command_line"
+            ),
             "intervention_seed": args.intervention_seed,
             "num_inference_steps": args.steps,
             "spatial_strength": args.spatial_strength,
@@ -267,16 +347,16 @@ def main() -> None:
     }
     _json_write(output_dir / "run_manifest.json", manifest)
 
-    applied_by_stem: dict[str, list[tuple[Any, Any, dict[str, Any]]]] = {}
-    for stem in stems:
-        original = store.load(stem)
+    applied_by_candidate: dict[str, list[tuple[Any, Any, dict[str, Any]]]] = {}
+    for candidate in candidates:
+        original = store.load(candidate.stem)
         applied_items = []
         for intervention in interventions:
             context = InterventionContext(
                 store=store,
-                original_stem=stem,
+                original_stem=candidate.stem,
                 intervention_seed=args.intervention_seed,
-                generation_seed=seeds[0],
+                generation_seed=candidate.seed,
             )
             applied = intervention.apply(original, context)
             applied_items.append(
@@ -286,19 +366,25 @@ def main() -> None:
                     _difference_summary(original, applied.condition),
                 )
             )
-        applied_by_stem[stem] = applied_items
+        applied_by_candidate[candidate.candidate_id] = applied_items
 
     if args.dry_run:
         manifest["dry_run_results"] = {
-            stem: [
-                {
-                    "intervention": intervention.slug,
-                    "details": applied.details,
-                    "difference": difference,
-                }
-                for intervention, applied, difference in applied_by_stem[stem]
-            ]
-            for stem in stems
+            candidate.candidate_id: {
+                "stem": candidate.stem,
+                "seed": candidate.seed,
+                "interventions": [
+                    {
+                        "intervention": intervention.slug,
+                        "details": applied.details,
+                        "difference": difference,
+                    }
+                    for intervention, applied, difference in applied_by_candidate[
+                        candidate.candidate_id
+                    ]
+                ],
+            }
+            for candidate in candidates
         }
         manifest["completed_at"] = datetime.now(UTC).isoformat()
         _json_write(output_dir / "run_manifest.json", manifest)
@@ -322,72 +408,103 @@ def main() -> None:
     _json_write(output_dir / "run_manifest.json", manifest)
 
     pair_count = 0
-    for stem in stems:
+    image_count = 0
+    for candidate in candidates:
+        stem = candidate.stem
+        seed = candidate.seed
         original = store.load(stem)
-        applied_items = applied_by_stem[stem]
-        for seed in seeds:
-            seed_dir = output_dir / "images" / stem / f"seed_{seed:010d}"
-            seed_dir.mkdir(parents=True, exist_ok=True)
-            baseline_path = seed_dir / "baseline.png"
-            pending = list(applied_items)
-            first_capacity = max(0, args.batch_size - 1)
-            first_items = pending[:first_capacity]
-            pending = pending[first_capacity:]
-            first_conditions = [original] + [item[1].condition for item in first_items]
-            first_images = generate_matched_conditions(
+        applied_items = applied_by_candidate[candidate.candidate_id]
+        seed_dir = output_dir / "images" / candidate.candidate_id / f"seed_{seed:010d}"
+        seed_dir.mkdir(parents=True, exist_ok=True)
+        baseline_path = seed_dir / "baseline.png"
+        pending = list(applied_items)
+        first_capacity = max(0, args.batch_size - 1)
+        first_items = pending[:first_capacity]
+        pending = pending[first_capacity:]
+        first_conditions = [original] + [item[1].condition for item in first_items]
+        first_images = generate_matched_conditions(
+            models,
+            first_conditions,
+            seed=seed,
+            prompt=args.prompt,
+            num_inference_steps=args.steps,
+            spatial_strength=args.spatial_strength,
+            matched_noise=True,
+        )
+        first_images[0].save(baseline_path)
+        _append_image_manifest(
+            images_manifest_path,
+            {
+                "candidate_id": candidate.candidate_id,
+                "stem": stem,
+                "seed": seed,
+                "condition": "baseline",
+                "intervention_parameters": "{}",
+                "image_path": str(baseline_path),
+            },
+        )
+        image_count += 1
+        generated_groups = [(first_items, first_images[1:])]
+        while pending:
+            group = pending[: args.batch_size]
+            pending = pending[args.batch_size :]
+            images = generate_matched_conditions(
                 models,
-                first_conditions,
+                [item[1].condition for item in group],
                 seed=seed,
                 prompt=args.prompt,
                 num_inference_steps=args.steps,
                 spatial_strength=args.spatial_strength,
                 matched_noise=True,
             )
-            first_images[0].save(baseline_path)
-            generated_groups = [(first_items, first_images[1:])]
-            while pending:
-                group = pending[: args.batch_size]
-                pending = pending[args.batch_size :]
-                images = generate_matched_conditions(
-                    models,
-                    [item[1].condition for item in group],
+            generated_groups.append((group, images))
+
+        for group, images in generated_groups:
+            for (intervention, applied, difference), image in zip(
+                group, images, strict=True
+            ):
+                counterfactual_path = seed_dir / f"{intervention.slug}.png"
+                image.save(counterfactual_path)
+                _append_image_manifest(
+                    images_manifest_path,
+                    {
+                        "candidate_id": candidate.candidate_id,
+                        "stem": stem,
+                        "seed": seed,
+                        "condition": intervention.slug,
+                        "intervention_parameters": json.dumps(
+                            intervention.parameters(), sort_keys=True
+                        ),
+                        "image_path": str(counterfactual_path),
+                    },
+                )
+                image_count += 1
+                reference_tile = store.image_path(stem)
+                record = MatchedPairRecord(
+                    candidate_id=candidate.candidate_id,
+                    stem=stem,
                     seed=seed,
                     prompt=args.prompt,
-                    num_inference_steps=args.steps,
-                    spatial_strength=args.spatial_strength,
-                    matched_noise=True,
+                    baseline_image=str(baseline_path),
+                    counterfactual_image=str(counterfactual_path),
+                    reference_tile=str(reference_tile) if reference_tile else None,
+                    intervention=intervention.manifest(),
+                    applied_details=applied.details,
+                    difference=difference,
                 )
-                generated_groups.append((group, images))
-
-            for group, images in generated_groups:
-                for (intervention, applied, difference), image in zip(
-                    group, images, strict=True
-                ):
-                    counterfactual_path = seed_dir / f"{intervention.slug}.png"
-                    image.save(counterfactual_path)
-                    reference_tile = store.image_path(stem)
-                    record = MatchedPairRecord(
-                        stem=stem,
-                        seed=seed,
-                        prompt=args.prompt,
-                        baseline_image=str(baseline_path),
-                        counterfactual_image=str(counterfactual_path),
-                        reference_tile=str(reference_tile) if reference_tile else None,
-                        intervention=intervention.manifest(),
-                        applied_details=applied.details,
-                        difference=difference,
-                    )
-                    _append_jsonl(pairs_path, record.to_dict())
-                    pair_count += 1
-            if models.device.type == "mps":
-                torch.mps.empty_cache()
-            elif models.device.type == "cuda":
-                torch.cuda.empty_cache()
+                _append_jsonl(pairs_path, record.to_dict())
+                pair_count += 1
+        if models.device.type == "mps":
+            torch.mps.empty_cache()
+        elif models.device.type == "cuda":
+            torch.cuda.empty_cache()
 
     manifest["status"] = "completed"
     manifest["completed_at"] = datetime.now(UTC).isoformat()
     manifest["pair_count"] = pair_count
+    manifest["image_count"] = image_count
     manifest["pairs_manifest"] = str(pairs_path)
+    manifest["images_manifest"] = str(images_manifest_path)
     _json_write(output_dir / "run_manifest.json", manifest)
     print(f"Generated {pair_count} matched counterfactual pair(s): {output_dir}")
 
