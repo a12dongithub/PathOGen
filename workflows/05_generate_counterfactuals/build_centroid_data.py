@@ -50,6 +50,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--candidate-count", type=int, default=300)
     parser.add_argument("--minimum-inflammatory-centroids", type=int, default=10)
+    parser.add_argument(
+        "--exclude-candidates",
+        type=Path,
+        help="CSV whose stems must be excluded from this artifact.",
+    )
+    parser.add_argument(
+        "--candidate-id-offset",
+        type=int,
+        default=0,
+        help="Integer added to generated candidate IDs.",
+    )
     return parser.parse_args()
 
 
@@ -107,6 +118,12 @@ def _select_candidates(
     table = table.loc[
         table["inflammatory_centroid_count"] >= args.minimum_inflammatory_centroids
     ].sort_values(["spatial_score", "stem"], ascending=[False, True], kind="stable")
+    if args.exclude_candidates:
+        excluded = pd.read_csv(args.exclude_candidates)
+        if "stem" not in excluded.columns:
+            raise ValueError("Excluded-candidate CSV is missing the stem column")
+        excluded_stems = set(excluded["stem"].dropna().astype(str))
+        table = table.loc[~table["stem"].isin(excluded_stems)]
     table = table.head(args.candidate_count).copy()
     if len(table) != args.candidate_count:
         raise ValueError(
@@ -117,7 +134,13 @@ def _select_candidates(
     table.insert(
         0,
         "candidate_id",
-        [f"candidate_{index:04d}" for index in range(args.candidate_count)],
+        [
+            f"candidate_{index:04d}"
+            for index in range(
+                args.candidate_id_offset,
+                args.candidate_id_offset + args.candidate_count,
+            )
+        ],
     )
     return table, centroid_controls, reference_stats
 
@@ -141,10 +164,10 @@ def main() -> None:
     args = parse_args()
     if args.candidate_count < 1:
         raise ValueError("--candidate-count must be positive")
-    if args.minimum_inflammatory_centroids < 3:
-        raise ValueError(
-            "At least three centroids are required for distinct dose levels"
-        )
+    if args.minimum_inflammatory_centroids < 1:
+        raise ValueError("At least one original inflammatory centroid is required")
+    if args.candidate_id_offset < 0:
+        raise ValueError("--candidate-id-offset must be non-negative")
     selected, centroid_controls, reference_stats = _select_candidates(args)
 
     morphology = pd.read_parquet(args.morphology_table)
@@ -206,12 +229,18 @@ def main() -> None:
             "created_at": datetime.now(timezone.utc).isoformat(),
             "selection": {
                 "source_sha256": _sha256(args.selected_candidates),
+                "excluded_candidates_sha256": (
+                    _sha256(args.exclude_candidates)
+                    if args.exclude_candidates
+                    else None
+                ),
                 "rule": (
                     "green_sd == 0; inflammatory centroid count >= "
                     f"{args.minimum_inflammatory_centroids}; spatial_score descending; "
-                    "stem ascending tie-break"
+                    "stem ascending tie-break; excluded stems removed"
                 ),
                 "candidate_count": len(selected),
+                "candidate_id_offset": args.candidate_id_offset,
             },
             "intervention_levels_sd": [0.0, 0.5, 1.0, 1.5],
             "centroid_count_reference": reference_stats,

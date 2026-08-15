@@ -133,6 +133,19 @@ uv run --extra inference python workflows/05_generate_counterfactuals/build_cent
   --output-dir artifacts/inflammatory_centroid_density_sd_v1
 ```
 
+To extend a completed cohort without regenerating it, exclude its selected
+manifest and continue the candidate IDs. Candidates must retain at least one
+original inflammatory centroid; the SD transform then yields distinct positive
+dose targets even for low-count controls.
+
+```bash
+uv run --extra inference python workflows/05_generate_counterfactuals/build_centroid_data.py \
+  --geojson-dir ../refactored/data/geojsons \
+  --output-dir artifacts/inflammatory_centroid_density_sd_v1_remaining \
+  --candidate-count 700 --minimum-inflammatory-centroids 1 \
+  --exclude-candidates completed_300.csv --candidate-id-offset 300
+```
+
 On a CUDA VM with this repository cloned and `gcloud` authenticated, run one
 shard and upload the resulting PNGs and CSV/JSON manifests. The runner
 automatically downloads and verifies each archive's `.sha256` sidecar before
