@@ -99,6 +99,10 @@ def write_status(path: Path, phase: str, **values: object) -> None:
 def upload_outputs(outputs: Path, output_uri: str, status_path: Path) -> None:
     if outputs.is_dir():
         run(["gcloud", "storage", "rsync", "--recursive", str(outputs), output_uri])
+    upload_status(status_path, output_uri)
+
+
+def upload_status(status_path: Path, output_uri: str) -> None:
     run(
         [
             "gcloud",
@@ -124,7 +128,9 @@ def main() -> None:
     downloads.mkdir(parents=True, exist_ok=True)
     inputs.mkdir(parents=True, exist_ok=True)
     outputs.mkdir(parents=True, exist_ok=True)
+    print(f"Output URI: {args.output_uri}", flush=True)
     write_status(status_path, "starting", output_uri=args.output_uri)
+    upload_status(status_path, args.output_uri)
     try:
         write_status(
             status_path, "downloading_training_data", output_uri=args.output_uri
@@ -178,6 +184,7 @@ def main() -> None:
             output_uri=args.output_uri,
             counterfactual_png_count=image_count,
         )
+        upload_status(status_path, args.output_uri)
         command = [
             sys.executable,
             str(REPOSITORY_ROOT / "workflows/07_train_evaluate_probe/run.py"),
@@ -213,15 +220,7 @@ def main() -> None:
             counterfactual_png_count=image_count,
             completed_at=datetime.now(timezone.utc).isoformat(),
         )
-        run(
-            [
-                "gcloud",
-                "storage",
-                "cp",
-                str(status_path),
-                args.output_uri.rstrip("/") + "/status.json",
-            ]
-        )
+        upload_status(status_path, args.output_uri)
     except Exception as error:
         write_status(
             status_path,
