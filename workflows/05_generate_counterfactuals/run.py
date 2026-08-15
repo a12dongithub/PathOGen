@@ -157,6 +157,12 @@ def _append_image_manifest(path: Path, record: dict[str, Any]) -> None:
         writer.writerow(record)
 
 
+def _save_png(image: Any, path: Path) -> None:
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    image.save(temporary, format="PNG")
+    temporary.replace(path)
+
+
 def _file_sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -431,7 +437,7 @@ def main() -> None:
             spatial_strength=args.spatial_strength,
             matched_noise=True,
         )
-        first_images[0].save(baseline_path)
+        _save_png(first_images[0], baseline_path)
         _append_image_manifest(
             images_manifest_path,
             {
@@ -464,7 +470,7 @@ def main() -> None:
                 group, images, strict=True
             ):
                 counterfactual_path = seed_dir / f"{intervention.slug}.png"
-                image.save(counterfactual_path)
+                _save_png(image, counterfactual_path)
                 _append_image_manifest(
                     images_manifest_path,
                     {
