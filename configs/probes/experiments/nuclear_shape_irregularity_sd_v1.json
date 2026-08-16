@@ -1,0 +1,12 @@
+{
+  "id": "nuclear_shape_irregularity_sd_v1",
+  "knob": "nuclear shape irregularity",
+  "levels_sd": [0.0, 0.5, 1.0, 1.5],
+  "changed_controls": [
+    "morphology.eccentricity_mean:+",
+    "morphology.perimeter_mean:+",
+    "morphology.solidity_mean:-"
+  ],
+  "preserved_controls": ["spatial_maps", "morphology.area_mean", "morphology.area_var", "generation_seed"],
+  "version": "v1"
+}

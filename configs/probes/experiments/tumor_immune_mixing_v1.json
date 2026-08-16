@@ -1,0 +1,9 @@
+{
+  "id": "tumor_immune_mixing_v1",
+  "knob": "tumor-immune spatial mixing",
+  "levels": [0.0, 0.25, 0.5, 0.75],
+  "changed_controls": ["spatial.inflammatory_distribution"],
+  "preserved_controls": ["spatial.inflammatory_mass", "other_spatial_channels", "morphology", "generation_seed"],
+  "target": "mass-matched inflammatory distribution centered on a Gaussian-smoothed tumor map (sigma 12 px)",
+  "version": "v1"
+}

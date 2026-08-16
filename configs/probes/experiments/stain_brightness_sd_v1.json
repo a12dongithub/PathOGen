@@ -1,0 +1,9 @@
+{
+  "id": "stain_brightness_sd_v1",
+  "knob": "stain brightness",
+  "levels_sd": [0.0, 0.5, 1.0, 1.5],
+  "changed_controls": ["morphology.r_mean", "morphology.g_mean", "morphology.b_mean"],
+  "preserved_controls": ["spatial_maps", "morphology.r_var", "morphology.g_var", "morphology.b_var", "generation_seed"],
+  "direction": "higher RGB intensity / brighter",
+  "version": "v1"
+}
