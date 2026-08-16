@@ -42,6 +42,19 @@
       ]
     },
     {
+      "name": "stain_brightness",
+      "experiment": "experiments.spatial.stain_brightness",
+      "data_uri": "gs://cpathogen_artifacts/inputs/generation/cohort_1000_v1/data.zip",
+      "output_uri": "gs://cpathogen_artifacts/outputs/counterfactuals/stain_brightness/sd_v1/cohort_1000/20260816-053143/extensions/signed_extremes_v2",
+      "candidate_count": 1000,
+      "omit_baseline": true,
+      "interventions": [
+        "stain_brightness_minus_2p0sd",
+        "stain_brightness_minus_1p0sd",
+        "stain_brightness_plus_2p0sd"
+      ]
+    },
+    {
       "name": "nuclear_shape_irregularity_full_panel",
       "experiment": "experiments.spatial.nuclear_shape_irregularity",
       "data_uri": "gs://cpathogen_artifacts/inputs/generation/cohort_1000_v1/data.zip",
@@ -55,19 +68,6 @@
         "nuclear_shape_irregularity_plus_1p0sd",
         "nuclear_shape_irregularity_plus_1p5sd",
         "nuclear_shape_irregularity_plus_2p0sd"
-      ]
-    },
-    {
-      "name": "stain_brightness",
-      "experiment": "experiments.spatial.stain_brightness",
-      "data_uri": "gs://cpathogen_artifacts/inputs/generation/cohort_1000_v1/data.zip",
-      "output_uri": "gs://cpathogen_artifacts/outputs/counterfactuals/stain_brightness/sd_v1/cohort_1000/20260816-053143/extensions/signed_extremes_v2",
-      "candidate_count": 1000,
-      "omit_baseline": true,
-      "interventions": [
-        "stain_brightness_minus_2p0sd",
-        "stain_brightness_minus_1p0sd",
-        "stain_brightness_plus_2p0sd"
       ]
     }
   ]
