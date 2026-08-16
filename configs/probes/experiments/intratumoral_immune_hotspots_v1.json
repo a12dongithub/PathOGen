@@ -1,0 +1,17 @@
+{
+  "id": "intratumoral_immune_hotspots_v1",
+  "knob": "intratumoral inflammatory hotspots",
+  "levels_added_centroids": [0, 80, 160, 320],
+  "changed_controls": ["spatial.inflammatory"],
+  "preserved_controls": [
+    "spatial.neoplastic",
+    "spatial.connective",
+    "spatial.dead",
+    "spatial.epithelial",
+    "morphology",
+    "generation_seed"
+  ],
+  "target": "squared peak-normalized neoplastic signal",
+  "signal_strength": 0.75,
+  "version": "v1"
+}

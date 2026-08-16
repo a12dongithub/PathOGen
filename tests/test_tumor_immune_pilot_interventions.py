@@ -1,4 +1,5 @@
 from pathlib import Path
+import random
 
 import numpy as np
 import pandas as pd
@@ -7,8 +8,10 @@ import torch
 from cpathogen.counterfactuals import ConditionStore, InterventionContext
 from cpathogen.counterfactuals.conditions import MORPHOLOGY_FEATURE_NAMES
 from experiments.spatial.intratumoral_immune_hotspots import build_interventions as hotspot_interventions
-from experiments.spatial.peritumoral_immune_ring import build_interventions as ring_interventions
-from experiments.spatial.tumor_boundary_replacement import build_interventions as replacement_interventions
+from experiments.spatial._tumor_immune_pilot_utils import (
+    intratumoral_weights,
+    sample_nested_centroids,
+)
 
 
 def make_store(tmp_path: Path) -> ConditionStore:
@@ -29,30 +32,35 @@ def context(store: ConditionStore) -> InterventionContext:
     return InterventionContext(store, "tile", intervention_seed=42, generation_seed=7)
 
 
-def test_centroid_pilots_are_nested_and_only_add_inflammatory_signal(tmp_path: Path) -> None:
+def test_hotspots_are_nested_and_only_add_inflammatory_signal(tmp_path: Path) -> None:
     store = make_store(tmp_path)
     original = store.load("tile")
-    for interventions in (ring_interventions(), hotspot_interventions()):
-        masses = []
-        for intervention in interventions:
-            converted = intervention.apply(original, context(store)).condition
-            assert torch.equal(converted.spatial[0], original.spatial[0])
-            assert torch.equal(converted.spatial[2:], original.spatial[2:])
-            assert torch.equal(converted.morphology, original.morphology)
-            masses.append(float(converted.spatial[1].sum()))
-        assert masses == sorted(masses)
-
-
-def test_boundary_replacement_moves_signal_between_declared_channels(tmp_path: Path) -> None:
-    store = make_store(tmp_path)
-    original = store.load("tile")
-    tumor_masses = []
     immune_masses = []
-    for intervention in replacement_interventions():
-        converted = intervention.apply(original, context(store)).condition
-        tumor_masses.append(float(converted.spatial[0].sum()))
-        immune_masses.append(float(converted.spatial[1].sum()))
+    for intervention in hotspot_interventions():
+        applied = intervention.apply(original, context(store))
+        converted = applied.condition
+        assert torch.equal(converted.spatial[0], original.spatial[0])
         assert torch.equal(converted.spatial[2:], original.spatial[2:])
         assert torch.equal(converted.morphology, original.morphology)
-    assert tumor_masses == sorted(tumor_masses, reverse=True)
+        assert applied.details["added_centroid_count"] == intervention.centroid_count
+        assert 0.0 <= applied.details["clipped_pixel_fraction"] <= 1.0
+        assert (
+            0.0
+            <= applied.details["added_centroid_fraction_in_high_tumor_mask"]
+            <= 1.0
+        )
+        immune_masses.append(float(converted.spatial[1].sum()))
     assert immune_masses == sorted(immune_masses)
+
+
+def test_hotspot_centroids_remain_nested_in_dense_regions(tmp_path: Path) -> None:
+    store = make_store(tmp_path)
+    original = store.load("tile")
+    weights = intratumoral_weights(original.spatial[0])
+    centroids = [
+        sample_nested_centroids(weights, count, rng=random.Random(1729))
+        for count in (80, 160, 320)
+    ]
+    assert np.array_equal(centroids[0], centroids[1][:80])
+    assert np.array_equal(centroids[1], centroids[2][:160])
+    assert len(np.unique(centroids[2], axis=0)) == 320

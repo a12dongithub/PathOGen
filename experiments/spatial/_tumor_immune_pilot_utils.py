@@ -6,7 +6,6 @@ import random
 
 import numpy as np
 import torch
-import torch.nn.functional as functional
 from torch import Tensor
 
 from cpathogen.counterfactuals.centroids import render_centroid_channel
@@ -21,19 +20,6 @@ def normalized_weights(values: Tensor) -> Tensor:
     if maximum <= 0.0:
         raise ValueError("Tumor spatial channel has no positive signal")
     return values / maximum
-
-
-def outer_tumor_ring_weights(tumor: Tensor, radius_px: int = 24) -> Tensor:
-    """Return a soft band immediately outside tumor-rich regions."""
-    normalized = normalized_weights(tumor)
-    kernel = 2 * radius_px + 1
-    dilated = functional.max_pool2d(
-        normalized[None, None], kernel_size=kernel, stride=1, padding=radius_px
-    )[0, 0]
-    weights = (dilated - normalized).clamp_min(0.0) * dilated
-    if float(weights.sum()) <= 0.0:
-        return normalized
-    return weights
 
 
 def intratumoral_weights(tumor: Tensor) -> Tensor:
@@ -61,37 +47,76 @@ def sample_nested_centroids(
         raise ValueError("Centroid sampling weights have no positive mass")
     height, width = values.shape
     accepted: list[tuple[int, int]] = []
+    accepted_set: set[tuple[int, int]] = set()
     minimum_squared = minimum_distance_px**2
+    fallback_order: np.ndarray | None = None
+    fallback_only = False
+
+    def weighted_fallback_order() -> np.ndarray:
+        clone = random.Random()
+        clone.setstate(rng.getstate())
+        generator = np.random.default_rng(clone.getrandbits(64))
+        positive = np.flatnonzero(values.ravel() > 0.0)
+        if len(positive) < count:
+            raise RuntimeError(
+                "Tumor-directed map has fewer positive pixels than requested centroids"
+            )
+        draws = np.maximum(generator.random(len(positive)), np.finfo(float).tiny)
+        keys = -np.log(draws) / values.ravel()[positive]
+        return positive[np.argsort(keys, kind="stable")]
+
+    def fallback_candidate(require_diagonal_spacing: bool) -> tuple[int, int] | None:
+        nonlocal fallback_order
+        if fallback_order is None:
+            fallback_order = weighted_fallback_order()
+        for index in fallback_order:
+            y, x = divmod(int(index), width)
+            point = (x, y)
+            if point in accepted_set:
+                continue
+            if require_diagonal_spacing and any(
+                neighbor in accepted_set
+                for neighbor in ((x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1))
+            ):
+                continue
+            return point
+        return None
+
     for _ in range(count):
         chosen: tuple[int, int] | None = None
-        for attempt in range(2048):
-            index = int(np.searchsorted(cumulative, rng.random() * cumulative[-1]))
-            y, x = divmod(min(index, values.size - 1), width)
-            required = minimum_squared if attempt < 1024 else 4.0
-            if all((x - px) ** 2 + (y - py) ** 2 >= required for px, py in accepted):
-                chosen = (x, y)
-                break
+        if not fallback_only:
+            for attempt in range(2048):
+                index = int(np.searchsorted(cumulative, rng.random() * cumulative[-1]))
+                y, x = divmod(min(index, values.size - 1), width)
+                required = minimum_squared if attempt < 1024 else 4.0
+                if all(
+                    (x - px) ** 2 + (y - py) ** 2 >= required
+                    for px, py in accepted
+                ):
+                    chosen = (x, y)
+                    break
         if chosen is None:
-            raise RuntimeError("Could not place separated tumor-directed centroids")
+            fallback_only = True
+            chosen = fallback_candidate(require_diagonal_spacing=True)
+        if chosen is None:
+            chosen = fallback_candidate(require_diagonal_spacing=False)
+        if chosen is None:
+            raise RuntimeError("Could not place unique tumor-directed centroids")
         accepted.append(chosen)
+        accepted_set.add(chosen)
     return np.asarray(accepted, dtype=np.int16)
+
+
+def minimum_centroid_distance(centroids: np.ndarray) -> float:
+    values = np.asarray(centroids, dtype=np.float64).reshape(-1, 2)
+    if len(values) < 2:
+        return float("inf")
+    differences = values[:, None, :] - values[None, :, :]
+    squared = np.sum(differences**2, axis=-1)
+    np.fill_diagonal(squared, np.inf)
+    return float(np.sqrt(squared.min()))
 
 
 def add_centroid_signal(original: Tensor, centroids: np.ndarray, strength: float) -> Tensor:
     rendered = render_centroid_channel(centroids).to(device=original.device)
     return torch.clamp(original + strength * rendered, 0.0, 1.0)
-
-
-def boundary_transfer_weights(tumor: Tensor, radius_px: int = 18) -> Tensor:
-    """Return a normalized soft tumor-boundary mask on both sides of the interface."""
-    normalized = normalized_weights(tumor)
-    kernel = 2 * radius_px + 1
-    local_max = functional.max_pool2d(
-        normalized[None, None], kernel_size=kernel, stride=1, padding=radius_px
-    )[0, 0]
-    local_min = -functional.max_pool2d(
-        -normalized[None, None], kernel_size=kernel, stride=1, padding=radius_px
-    )[0, 0]
-    contrast = (local_max - local_min).clamp_min(0.0)
-    maximum = float(contrast.max())
-    return contrast / maximum if maximum > 0.0 else normalized
