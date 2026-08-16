@@ -17,22 +17,6 @@ def load_run():
     return module
 
 
-def test_pool_patients_means_then_normalizes() -> None:
-    module = load_run()
-    tiles = pd.DataFrame(
-        {
-            "patient_id": ["A", "A", "B"],
-            "label": ["Basal", "Basal", "LumA"],
-            "outer_fold": [0, 0, 1],
-        }
-    )
-    embeddings = np.array([[1.0, 0.0], [0.0, 1.0], [0.0, 2.0]], dtype=np.float32)
-    patients, pooled = module.pool_patients(tiles, embeddings)
-    assert patients["patient_id"].tolist() == ["A", "B"]
-    np.testing.assert_allclose(pooled[0], [2**-0.5, 2**-0.5])
-    np.testing.assert_allclose(pooled[1], [0.0, 1.0])
-
-
 def test_counterfactual_scoring_uses_held_out_head_or_ensemble() -> None:
     module = load_run()
     x = np.array([[-2.0], [2.0]])

@@ -1,10 +1,10 @@
 # Workflow 08: prepare the TCGA-BRCA PAM50 probe
 
 The first PAM50 task is **Basal vs Luminal A**. PAM50 is a patient-level
-RNA-derived label, so real tile embeddings are mean-pooled within patient before
-fitting a head. Five patient-disjoint outer folds are stored in the manifest;
-counterfactuals must be scored by the fold head that did not train on their
-source patient.
+RNA-derived label inherited by each sampled tile, so tile labels are weak rather
+than direct morphology annotations. Heads are trained at tile level, while the
+five outer folds remain patient-disjoint. Tile probabilities can subsequently
+be averaged within patient.
 
 The builder reads the LinkedOmics clinical matrix and the existing real
 TCGA-BRCA tile directory. It deterministically caps tiles per patient to bound

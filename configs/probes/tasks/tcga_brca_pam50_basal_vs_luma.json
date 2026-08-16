@@ -9,7 +9,8 @@
     "Basal"
   ],
   "positive_class": "Basal",
-  "aggregation_unit": "patient_mean_embedding",
+  "training_unit": "tile_with_patient_inherited_label",
+  "aggregation_unit": "tile_predictions_then_patient_mean_probability",
   "evaluation": "patient-disjoint five-fold cross-fitting",
   "version": "v1"
 }

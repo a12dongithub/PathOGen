@@ -66,34 +66,6 @@ def resolve_counterfactual_path(value: str, root: Path) -> Path:
     return root / Path(*path.parts[path.parts.index("images") :])
 
 
-def l2_normalize(matrix: np.ndarray) -> np.ndarray:
-    norms = np.linalg.norm(matrix, axis=1, keepdims=True)
-    if np.any(norms == 0):
-        raise ValueError("Cannot normalize a zero patient embedding")
-    return matrix / norms
-
-
-def pool_patients(tiles: pd.DataFrame, embeddings: np.ndarray) -> tuple[pd.DataFrame, np.ndarray]:
-    if len(tiles) != len(embeddings):
-        raise ValueError("Tile metadata and embedding row counts differ")
-    metadata: list[dict[str, Any]] = []
-    pooled: list[np.ndarray] = []
-    for patient_id, indexes in tiles.groupby("patient_id", sort=True).indices.items():
-        group = tiles.iloc[indexes]
-        if group["label"].nunique() != 1 or group["outer_fold"].nunique() != 1:
-            raise ValueError(f"Inconsistent patient metadata for {patient_id}")
-        metadata.append(
-            {
-                "patient_id": patient_id,
-                "label": group["label"].iloc[0],
-                "outer_fold": int(group["outer_fold"].iloc[0]),
-                "tile_count": len(group),
-            }
-        )
-        pooled.append(embeddings[indexes].mean(axis=0))
-    return pd.DataFrame(metadata), l2_normalize(np.stack(pooled).astype(np.float32))
-
-
 def select_c_nested(
     embeddings: np.ndarray,
     labels: np.ndarray,
@@ -246,25 +218,41 @@ def main() -> None:
         num_workers=args.num_workers,
         description="real TCGA-BRCA tiles",
     )
-    patients, patient_embeddings = pool_patients(training, real_tile_embeddings)
-    labels = patients["label"].map(LABEL_TO_INT).to_numpy(dtype=np.int64)
-    folds = patients["outer_fold"].to_numpy(dtype=np.int64)
+    labels = training["label"].map(LABEL_TO_INT).to_numpy(dtype=np.int64)
+    folds = training["outer_fold"].to_numpy(dtype=np.int64)
     if len(set(folds)) != 5:
         raise ValueError(f"Expected five outer folds, found {sorted(set(folds))}")
     heads, oof, metrics = fit_cross_fitted_heads(
-        patient_embeddings, labels, folds, list(args.c_values), args.seed
+        real_tile_embeddings, labels, folds, list(args.c_values), args.seed
     )
-    patients["label_index"] = labels
-    patients["probability_Basal_oof"] = oof
-    patients["probability_LumA_oof"] = 1.0 - oof
-    patients["predicted_label_oof"] = np.where(oof >= 0.5, POSITIVE_CLASS, NEGATIVE_CLASS)
+    tile_oof = training.copy()
+    tile_oof["label_index"] = labels
+    tile_oof["probability_Basal_oof"] = oof
+    tile_oof["probability_LumA_oof"] = 1.0 - oof
+    tile_oof["predicted_label_oof"] = np.where(oof >= 0.5, POSITIVE_CLASS, NEGATIVE_CLASS)
+    tile_oof.to_csv(args.output_dir / "tile_oof_predictions.csv", index=False)
+    patients = (
+        tile_oof.groupby(["patient_id", "label", "outer_fold"], as_index=False)
+        .agg(
+            tile_count=("tile_id", "size"),
+            probability_Basal_oof=("probability_Basal_oof", "mean"),
+        )
+        .sort_values(["outer_fold", "label", "patient_id"], kind="stable")
+    )
+    patients["probability_LumA_oof"] = 1.0 - patients["probability_Basal_oof"]
+    patients["predicted_label_oof"] = np.where(
+        patients["probability_Basal_oof"] >= 0.5, POSITIVE_CLASS, NEGATIVE_CLASS
+    )
     patients.to_csv(args.output_dir / "patient_oof_predictions.csv", index=False)
+    patient_labels_int = patients["label"].map(LABEL_TO_INT).to_numpy(dtype=np.int64)
+    metrics["overall_oof_tile"] = metrics.pop("overall_oof")
+    metrics["overall_oof_patient"] = binary_metrics(
+        patient_labels_int, patients["probability_Basal_oof"].to_numpy()
+    )
     np.savez_compressed(
         args.output_dir / "real_embeddings.npz",
         tile_embeddings=real_tile_embeddings,
         tile_ids=training["tile_id"].to_numpy(),
-        patient_embeddings=patient_embeddings,
-        patient_ids=patients["patient_id"].to_numpy(),
         labels=labels,
         outer_folds=folds,
     )
@@ -274,7 +262,7 @@ def main() -> None:
             "positive_class": POSITIVE_CLASS,
             "negative_class": NEGATIVE_CLASS,
             "task": TASK_NAME,
-            "aggregation": "L2-normalized mean tile embedding per patient",
+            "training_unit": "tile with patient-inherited PAM50 label",
         },
         args.output_dir / "cross_fitted_classifiers.joblib",
     )
@@ -392,8 +380,9 @@ def main() -> None:
         {
             "task": TASK_NAME,
             "positive_class": POSITIVE_CLASS,
-            "evaluation_unit": "patient",
-            "aggregation": "L2-normalized mean tile embedding within patient",
+            "training_unit": "tile with patient-inherited PAM50 label",
+            "folding_unit": "patient",
+            "patient_aggregation": "mean tile probability",
             "encoder": "CTransPath",
             "encoder_checkpoint_sha256": sha256(args.ctranspath_checkpoint),
             "device": str(device),
@@ -414,7 +403,7 @@ def main() -> None:
         "task": TASK_NAME,
         "encoder": "CTransPath",
         "encoder_frozen": True,
-        "head": "five cross-fitted class-balanced L2 logistic regressions",
+        "head": "five tile-trained, patient-disjoint, class-balanced L2 logistic regressions",
         "counterfactual_source_uri": args.counterfactual_source_uri,
         "counterfactual_archive_member_prefix": args.counterfactual_archive_member_prefix or None,
         "training_manifest_sha256": sha256(training_manifest),

@@ -1,0 +1,15 @@
+{
+  "id": "nuclear_enlargement_sd_v1",
+  "knob": "mean nuclear size",
+  "levels_sd": [0.0, 0.5, 1.0, 1.5],
+  "changed_controls": ["morphology.area_mean", "morphology.perimeter_mean"],
+  "preserved_controls": [
+    "spatial_maps",
+    "morphology.area_var",
+    "morphology.perimeter_var",
+    "other_morphology_features",
+    "generation_seed"
+  ],
+  "implementation": "Add the same SD step to standardized area_mean and perimeter_mean",
+  "version": "v1"
+}
