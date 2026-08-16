@@ -1,0 +1,15 @@
+{
+  "id": "inflammatory_centroid_density_sd_v1",
+  "display_name": "Inflammatory centroid density",
+  "knob": "square-root inflammatory nucleus count",
+  "levels": [
+    0.0,
+    0.5,
+    1.0,
+    1.5
+  ],
+  "unit": "reference standard deviations",
+  "candidate_count": 1000,
+  "counterfactual_uri": "gs://cpathogen_artifacts/inputs/counterfactuals/inflammatory_centroid_density/sd_v1/cohort_1000/generated.zip",
+  "version": "sd_v1"
+}

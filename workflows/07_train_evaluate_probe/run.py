@@ -47,6 +47,7 @@ def parse_args() -> argparse.Namespace:
         "--counterfactual-source-uri",
         help="GCS prefix recorded in the final prediction table.",
     )
+    parser.add_argument("--expected-counterfactual-candidates", type=int)
     parser.add_argument("--ctranspath-checkpoint", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--batch-size", type=int, default=64)
@@ -357,8 +358,25 @@ def main() -> None:
     device = choose_device(args.device)
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
+    counterfactuals = pd.read_csv(inputs.counterfactual_manifest)
+    if args.smoke_limit_counterfactual:
+        counterfactuals = counterfactuals.head(args.smoke_limit_counterfactual).copy()
+    counterfactuals["source_patient_id"] = counterfactuals["stem"].map(
+        patient_from_stem
+    )
+    counterfactual_patients = set(counterfactuals["source_patient_id"].dropna())
+
     training = pd.read_csv(inputs.training_manifest)
     training = training[training["split"].isin(("train", "validation", "test"))].copy()
+    training_rows_before_exclusion = len(training)
+    training_patients_before_exclusion = int(training["patient_id"].nunique())
+    excluded_patients = sorted(set(training["patient_id"]) & counterfactual_patients)
+    training = training.loc[~training["patient_id"].isin(excluded_patients)].copy()
+    if set(training["split"]) != {"train", "validation", "test"}:
+        raise ValueError("Counterfactual-patient exclusion emptied a real-data split")
+    for split, group in training.groupby("split"):
+        if set(group["label"]) != set(LABEL_TO_INT):
+            raise ValueError(f"Real-data split {split!r} lost one class after exclusion")
     if set(training["label"]) != set(LABEL_TO_INT):
         raise ValueError(
             f"Unexpected training labels: {sorted(training['label'].unique())}"
@@ -406,9 +424,6 @@ def main() -> None:
         classes=classifier.classes_,
     )
 
-    counterfactuals = pd.read_csv(inputs.counterfactual_manifest)
-    if args.smoke_limit_counterfactual:
-        counterfactuals = counterfactuals.head(args.smoke_limit_counterfactual).copy()
     counterfactual_paths = [
         resolve_counterfactual_path(value, args.counterfactual_root)
         for value in counterfactuals["image_path"]
@@ -431,7 +446,7 @@ def main() -> None:
     results = counterfactuals.copy()
     results["model_id"] = "ctranspath_frozen_l2_logistic"
     results["task"] = TASK_NAME
-    results["source_patient_id"] = results["stem"].map(patient_from_stem)
+    results["source_patient_id"] = counterfactuals["source_patient_id"]
     results["knob_sd"] = [
         knob_sd(parameters, condition)
         for parameters, condition in zip(
@@ -450,18 +465,38 @@ def main() -> None:
     ]
     if args.counterfactual_source_uri:
         source_prefix = args.counterfactual_source_uri.rstrip("/")
-        results["counterfactual_gcs_uri"] = [
-            f"{source_prefix}/{relative}" for relative in results["relative_image_path"]
-        ]
+        results["counterfactual_source_uri"] = source_prefix
+        if source_prefix.endswith(".zip"):
+            results["counterfactual_archive_member"] = results[
+                "relative_image_path"
+            ]
+            results["counterfactual_gcs_uri"] = pd.NA
+        else:
+            results["counterfactual_archive_member"] = pd.NA
+            results["counterfactual_gcs_uri"] = [
+                f"{source_prefix}/{relative}"
+                for relative in results["relative_image_path"]
+            ]
     else:
+        results["counterfactual_source_uri"] = pd.NA
+        results["counterfactual_archive_member"] = pd.NA
         results["counterfactual_gcs_uri"] = pd.NA
 
     if not args.smoke_limit_counterfactual:
         counts = results.groupby("candidate_id")["condition"].nunique()
-        if len(results) != 1_200 or results["candidate_id"].nunique() != 300:
+        candidate_count = int(results["candidate_id"].nunique())
+        if (
+            args.expected_counterfactual_candidates
+            and candidate_count != args.expected_counterfactual_candidates
+        ):
             raise ValueError(
-                "Expected 1,200 rows from 300 counterfactual candidates; "
-                f"found {len(results)} rows from {results['candidate_id'].nunique()} candidates"
+                f"Expected {args.expected_counterfactual_candidates} candidates; "
+                f"found {candidate_count}"
+            )
+        if len(results) != 4 * candidate_count:
+            raise ValueError(
+                f"Expected four rows per candidate; found {len(results)} rows for "
+                f"{candidate_count} candidates"
             )
         if not (counts == 4).all() or set(results["knob_sd"]) != {0.0, 0.5, 1.0, 1.5}:
             raise ValueError(
@@ -524,6 +559,16 @@ def main() -> None:
             "device": str(device),
             "counterfactual_rows": len(results),
             "counterfactual_candidates": int(results["candidate_id"].nunique()),
+            "counterfactual_source_patients": len(counterfactual_patients),
+            "training_exclusion": {
+                "reason": "counterfactual source-patient disjointness",
+                "excluded_patient_count": len(excluded_patients),
+                "excluded_patients": excluded_patients,
+                "rows_before": training_rows_before_exclusion,
+                "rows_after": len(training),
+                "patients_before": training_patients_before_exclusion,
+                "patients_after": int(training["patient_id"].nunique()),
+            },
             "completed_at": completed_at,
         }
     )

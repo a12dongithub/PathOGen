@@ -7,9 +7,11 @@ and evaluates it once on the held-out real test split. The fixed model then
 scores all 1,200 generated images from the 300-candidate inflammatory-centroid
 density experiment.
 
-The 44 `probe_holdout` patients are never used for head fitting, model
-selection, or the conventional real-image test. Counterfactual images are used
-only after the head is fixed.
+Every counterfactual source patient is removed from all real-data splits before
+head fitting or model selection. Counterfactual images are used only after the
+head is fixed. This exclusion is recorded in `metrics.json` and is essential
+when an expanded counterfactual cohort includes patients beyond the original
+`probe_holdout` set.
 
 ## One-command VM run
 
@@ -20,11 +22,11 @@ uv sync --extra probe
 uv run python workflows/07_train_evaluate_probe/cloud_run.py
 ```
 
-The defaults point to:
+The canonical defaults point to:
 
-- `gs://cpathogen_artifacts/inputs/bcss_tumor_stroma_v1/bcss_tumor_stroma_v1.zip`
-- `gs://cpathogen_artifacts/models/ctranspath/ctranspath.pth`
-- `gs://cpathogen_artifacts/outputs/inflammatory_centroid_density_sd_v1_20260815-1508`
+- `gs://cpathogen_artifacts/inputs/classification_tasks/bcss_tumor_stroma/v1/dataset.zip`
+- `gs://cpathogen_artifacts/models/encoders/ctranspath/v1/ctranspath.pth`
+- `gs://cpathogen_artifacts/inputs/counterfactuals/inflammatory_centroid_density/sd_v1/cohort_1000/generated.zip`
 
 Supply `--output-uri` when a stable run name is preferred. Otherwise a UTC
 timestamp is appended automatically. Add `--dry-run` to download, verify, and

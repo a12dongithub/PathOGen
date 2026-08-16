@@ -1,0 +1,15 @@
+{
+  "id": "tcga_brca_pam50_basal_vs_luma",
+  "dataset": "TCGA-BRCA real tiles joined to LinkedOmics clinical annotations",
+  "label_source": "https://linkedomics.org/data_download/TCGA-BRCA/",
+  "label_field": "PAM50",
+  "label_level": "patient",
+  "classes": [
+    "LumA",
+    "Basal"
+  ],
+  "positive_class": "Basal",
+  "aggregation_unit": "patient_mean_embedding",
+  "evaluation": "patient-disjoint five-fold cross-fitting",
+  "version": "v1"
+}

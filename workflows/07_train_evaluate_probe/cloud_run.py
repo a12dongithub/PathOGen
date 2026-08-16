@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import hashlib
 import json
 import shutil
@@ -15,11 +16,15 @@ from pathlib import Path
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_TRAINING_URI = (
-    "gs://cpathogen_artifacts/inputs/bcss_tumor_stroma_v1/bcss_tumor_stroma_v1.zip"
+    "gs://cpathogen_artifacts/inputs/classification_tasks/"
+    "bcss_tumor_stroma/v1/dataset.zip"
 )
-DEFAULT_CHECKPOINT_URI = "gs://cpathogen_artifacts/models/ctranspath/ctranspath.pth"
+DEFAULT_CHECKPOINT_URI = (
+    "gs://cpathogen_artifacts/models/encoders/ctranspath/v1/ctranspath.pth"
+)
 DEFAULT_COUNTERFACTUAL_URI = (
-    "gs://cpathogen_artifacts/outputs/inflammatory_centroid_density_sd_v1_20260815-1508"
+    "gs://cpathogen_artifacts/inputs/counterfactuals/"
+    "inflammatory_centroid_density/sd_v1/cohort_1000/generated.zip"
 )
 
 
@@ -32,10 +37,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output-uri",
         default=(
-            "gs://cpathogen_artifacts/outputs/model_probes/"
-            f"ctranspath_bcss_tumor_stroma_{timestamp}"
+            "gs://cpathogen_artifacts/outputs/probes/bcss_tumor_stroma/"
+            "ctranspath/inflammatory_centroid_density_sd_v1/"
+            f"{timestamp}"
         ),
     )
+    parser.add_argument(
+        "--model-output-uri",
+        default=(
+            "gs://cpathogen_artifacts/models/probes/"
+            f"bcss_tumor_stroma/ctranspath/{timestamp}"
+        ),
+    )
+    parser.add_argument("--expected-candidates", type=int)
     parser.add_argument(
         "--workspace", type=Path, default=Path.home() / "cpathogen-probe"
     )
@@ -71,6 +85,28 @@ def safe_extract(archive_path: Path, destination: Path) -> None:
         archive.extractall(destination)
 
 
+def dataset_root(root: Path, marker: str) -> Path:
+    matches = list(root.rglob(marker))
+    if len(matches) != 1:
+        raise ValueError(
+            f"Expected one {marker!r} below {root}, found {len(matches)}"
+        )
+    return matches[0].parent
+
+
+def counterfactual_counts(root: Path) -> tuple[int, int]:
+    manifest = root / "images.csv"
+    with manifest.open(newline="", encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+    candidates = {row["candidate_id"] for row in rows}
+    conditions: dict[str, set[str]] = {candidate: set() for candidate in candidates}
+    for row in rows:
+        conditions[row["candidate_id"]].add(row["condition"])
+    if any(len(values) != 4 for values in conditions.values()):
+        raise ValueError("Every counterfactual candidate must have four conditions")
+    return len(rows), len(candidates)
+
+
 def download_verified(uri: str, destination: Path) -> None:
     destination.parent.mkdir(parents=True, exist_ok=True)
     sidecar = destination.with_suffix(destination.suffix + ".sha256")
@@ -100,6 +136,25 @@ def upload_outputs(outputs: Path, output_uri: str, status_path: Path) -> None:
     if outputs.is_dir():
         run(["gcloud", "storage", "rsync", "--recursive", str(outputs), output_uri])
     upload_status(status_path, output_uri)
+
+
+def upload_model_artifacts(outputs: Path, model_output_uri: str) -> None:
+    names = (
+        "classifier.joblib",
+        "head_weights.npz",
+        "real_tile_embeddings.npz",
+        "metrics.json",
+        "run_manifest.json",
+    )
+    run(
+        [
+            "gcloud",
+            "storage",
+            "cp",
+            *(str(outputs / name) for name in names),
+            model_output_uri.rstrip("/") + "/",
+        ]
+    )
 
 
 def upload_status(status_path: Path, output_uri: str) -> None:
@@ -140,33 +195,47 @@ def main() -> None:
         download_verified(args.training_data_uri, training_zip)
         download_verified(args.encoder_checkpoint_uri, encoder_checkpoint)
 
-        training_root = inputs / "bcss_tumor_stroma_v1"
-        if not (training_root / "tiles.csv").is_file():
+        training_container = inputs / "training"
+        training_container.mkdir(parents=True, exist_ok=True)
+        if not list(training_container.rglob("tiles.csv")):
             write_status(
                 status_path, "extracting_training_data", output_uri=args.output_uri
             )
-            safe_extract(training_zip, inputs)
+            safe_extract(training_zip, training_container)
+        training_root = dataset_root(training_container, "tiles.csv")
 
-        counterfactual_root = inputs / "counterfactuals"
-        counterfactual_root.mkdir(parents=True, exist_ok=True)
+        counterfactual_container = inputs / "counterfactuals"
+        counterfactual_container.mkdir(parents=True, exist_ok=True)
         write_status(
             status_path, "downloading_counterfactuals", output_uri=args.output_uri
         )
-        run(
-            [
-                "gcloud",
-                "storage",
-                "rsync",
-                "--recursive",
-                args.counterfactual_uri.rstrip("/"),
-                str(counterfactual_root),
-            ]
-        )
+        if args.counterfactual_uri.endswith(".zip"):
+            counterfactual_zip = downloads / Path(args.counterfactual_uri).name
+            download_verified(args.counterfactual_uri, counterfactual_zip)
+            if not list(counterfactual_container.rglob("images.csv")):
+                safe_extract(counterfactual_zip, counterfactual_container)
+        else:
+            run(
+                [
+                    "gcloud",
+                    "storage",
+                    "rsync",
+                    "--recursive",
+                    args.counterfactual_uri.rstrip("/"),
+                    str(counterfactual_container),
+                ]
+            )
+        counterfactual_root = dataset_root(counterfactual_container, "images.csv")
+        manifest_rows, candidate_count = counterfactual_counts(counterfactual_root)
         image_count = sum(1 for _ in counterfactual_root.glob("images/**/*.png"))
-        if image_count != 1_200:
-            raise ValueError(f"Expected 1,200 counterfactual PNGs, found {image_count}")
-        if not (counterfactual_root / "images.csv").is_file():
-            raise FileNotFoundError(counterfactual_root / "images.csv")
+        if image_count != manifest_rows:
+            raise ValueError(
+                f"Manifest has {manifest_rows} rows but archive has {image_count} PNGs"
+            )
+        if args.expected_candidates and candidate_count != args.expected_candidates:
+            raise ValueError(
+                f"Expected {args.expected_candidates} candidates, found {candidate_count}"
+            )
 
         if args.dry_run:
             write_status(
@@ -174,6 +243,7 @@ def main() -> None:
                 "dry_run_completed",
                 output_uri=args.output_uri,
                 counterfactual_png_count=image_count,
+                counterfactual_candidate_count=candidate_count,
             )
             upload_outputs(outputs, args.output_uri, status_path)
             return
@@ -182,7 +252,9 @@ def main() -> None:
             status_path,
             "training_and_evaluating",
             output_uri=args.output_uri,
+            model_output_uri=args.model_output_uri,
             counterfactual_png_count=image_count,
+            counterfactual_candidate_count=candidate_count,
         )
         upload_status(status_path, args.output_uri)
         command = [
@@ -204,20 +276,27 @@ def main() -> None:
             str(args.num_workers),
             "--device",
             args.device,
+            "--expected-counterfactual-candidates",
+            str(candidate_count),
         ]
         run(command)
+        upload_model_artifacts(outputs, args.model_output_uri)
         write_status(
             status_path,
             "uploading_outputs",
             output_uri=args.output_uri,
+            model_output_uri=args.model_output_uri,
             counterfactual_png_count=image_count,
+            counterfactual_candidate_count=candidate_count,
         )
         upload_outputs(outputs, args.output_uri, status_path)
         write_status(
             status_path,
             "completed",
             output_uri=args.output_uri,
+            model_output_uri=args.model_output_uri,
             counterfactual_png_count=image_count,
+            counterfactual_candidate_count=candidate_count,
             completed_at=datetime.now(timezone.utc).isoformat(),
         )
         upload_status(status_path, args.output_uri)
@@ -226,6 +305,7 @@ def main() -> None:
             status_path,
             "failed",
             output_uri=args.output_uri,
+            model_output_uri=args.model_output_uri,
             error=f"{type(error).__name__}: {error}",
         )
         try:

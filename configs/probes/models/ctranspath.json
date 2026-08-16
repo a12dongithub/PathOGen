@@ -1,0 +1,10 @@
+{
+  "id": "ctranspath",
+  "architecture": "Swin-T with convolutional patch stem",
+  "encoder_frozen": true,
+  "embedding_normalization": "L2",
+  "head": "class-balanced L2 logistic regression",
+  "checkpoint_uri": "gs://cpathogen_artifacts/models/encoders/ctranspath/v1/ctranspath.pth",
+  "source": "https://github.com/Xiyue-Wang/TransPath",
+  "version": "v1"
+}

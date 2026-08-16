@@ -1,0 +1,12 @@
+{
+  "id": "bcss_tumor_stroma",
+  "dataset": "BCSS/TIGER-compatible breast tissue ROIs",
+  "label_level": "tile",
+  "classes": [
+    "tumor_associated_stroma",
+    "invasive_tumor"
+  ],
+  "positive_class": "invasive_tumor",
+  "aggregation_unit": "tile",
+  "version": "v1"
+}
