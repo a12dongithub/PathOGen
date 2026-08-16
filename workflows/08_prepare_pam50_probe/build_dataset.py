@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import json
 import shutil
+import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -23,6 +24,11 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--max-tiles-per-patient", type=int, default=12)
     result.add_argument("--outer-folds", type=int, default=5)
     result.add_argument("--write-images", action="store_true")
+    result.add_argument(
+        "--archive",
+        type=Path,
+        help="Optional ZIP destination; requires --write-images.",
+    )
     return result
 
 
@@ -57,6 +63,24 @@ def stable_key(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
+def write_archive(source: Path, destination: Path) -> None:
+    destination = destination.expanduser().resolve()
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if destination.exists():
+        raise FileExistsError(destination)
+    temporary = destination.with_suffix(destination.suffix + ".tmp")
+    with zipfile.ZipFile(
+        temporary, "w", compression=zipfile.ZIP_STORED, allowZip64=True
+    ) as archive:
+        for path in sorted(source.rglob("*")):
+            if path.is_file() and path != temporary:
+                archive.write(path, path.relative_to(source))
+    temporary.replace(destination)
+    destination.with_suffix(destination.suffix + ".sha256").write_text(
+        f"{sha256(destination)}  {destination.name}\n", encoding="utf-8"
+    )
+
+
 def fold_map(labels: pd.Series, folds: int) -> dict[str, int]:
     mapping: dict[str, int] = {}
     for label in CLASSES:
@@ -71,6 +95,8 @@ def main() -> None:
         raise ValueError("--max-tiles-per-patient must be positive")
     if args.outer_folds < 3:
         raise ValueError("--outer-folds must be at least three")
+    if args.archive and not args.write_images:
+        raise ValueError("--archive requires --write-images")
     labels = clinical_labels(args.clinical_tsi)
     folds = fold_map(labels, args.outer_folds)
 
@@ -140,6 +166,8 @@ def main() -> None:
     (output / "dataset_summary.json").write_text(
         json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
+    if args.archive:
+        write_archive(output, args.archive)
     print(json.dumps(summary, indent=2, sort_keys=True))
 
 
