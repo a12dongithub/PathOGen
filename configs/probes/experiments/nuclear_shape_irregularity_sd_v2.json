@@ -1,0 +1,12 @@
+{
+  "id": "nuclear_shape_irregularity_sd_v2",
+  "knob": "nuclear shape irregularity",
+  "levels_sd": [-2.0, -1.0, 0.0, 0.5, 1.0, 1.5, 2.0],
+  "dataset_uri": "gs://cpathogen_artifacts/outputs/counterfactuals/nuclear_shape_irregularity/sd_v2/cohort_1000/full_signed_panel",
+  "changed_controls": [
+    "morphology.eccentricity_mean:+",
+    "morphology.perimeter_mean:+",
+    "morphology.solidity_mean:-"
+  ],
+  "version": "sd_v2"
+}

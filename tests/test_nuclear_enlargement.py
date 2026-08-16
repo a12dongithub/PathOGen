@@ -4,7 +4,10 @@ import numpy as np
 import pandas as pd
 import torch
 
-from cpathogen.counterfactuals import ConditionBundle, ConditionStore, InterventionContext
+from cpathogen.counterfactuals import (
+    ConditionStore,
+    InterventionContext,
+)
 from cpathogen.counterfactuals.conditions import MORPHOLOGY_FEATURE_NAMES
 from experiments.spatial.nuclear_enlargement import build_interventions
 
@@ -26,7 +29,7 @@ def test_nuclear_enlargement_changes_only_mean_size_features(tmp_path: Path) -> 
     original = store.load("tile")
     area = MORPHOLOGY_FEATURE_NAMES.index("area_mean")
     perimeter = MORPHOLOGY_FEATURE_NAMES.index("perimeter_mean")
-    expected_levels = [0.5, 1.0, 1.5]
+    expected_levels = [-2.0, -1.0, 0.5, 1.0, 1.5, 2.0]
     for intervention, level in zip(build_interventions(), expected_levels, strict=True):
         applied = intervention.apply(
             original,
@@ -43,7 +46,10 @@ def test_nuclear_enlargement_changes_only_mean_size_features(tmp_path: Path) -> 
 
 def test_nuclear_enlargement_levels_are_nested() -> None:
     assert [item.parameters()["sd_steps"] for item in build_interventions()] == [
+        -2.0,
+        -1.0,
         0.5,
         1.0,
         1.5,
+        2.0,
     ]

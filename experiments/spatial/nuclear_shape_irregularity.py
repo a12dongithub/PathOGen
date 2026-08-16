@@ -19,10 +19,11 @@ class NuclearShapeIrregularity(ConditionIntervention):
 
     def __init__(self, sd_steps: float) -> None:
         self.sd_steps = float(sd_steps)
-        if self.sd_steps <= 0.0:
-            raise ValueError("sd_steps must be positive")
-        label = str(self.sd_steps).replace(".", "p")
-        self.name = f"nuclear_shape_irregularity_plus_{label}sd"
+        if self.sd_steps == 0.0:
+            raise ValueError("sd_steps must be non-zero; baseline represents zero")
+        label = str(abs(self.sd_steps)).replace(".", "p")
+        direction = "plus" if self.sd_steps > 0 else "minus"
+        self.name = f"nuclear_shape_irregularity_{direction}_{label}sd"
 
     def parameters(self) -> dict[str, Any]:
         return {
@@ -55,16 +56,17 @@ class NuclearShapeIrregularity(ConditionIntervention):
                 original[PERIMETER_MEAN_INDEX] + self.sd_steps
             ),
             "solidity_mean_before": float(original[SOLIDITY_MEAN_INDEX]),
-            "solidity_mean_after": float(
-                original[SOLIDITY_MEAN_INDEX] - self.sd_steps
-            ),
+            "solidity_mean_after": float(original[SOLIDITY_MEAN_INDEX] - self.sd_steps),
             "area_features_changed": False,
         }
 
 
 def build_interventions() -> list[ConditionIntervention]:
     return [
+        NuclearShapeIrregularity(-2.0),
+        NuclearShapeIrregularity(-1.0),
         NuclearShapeIrregularity(0.5),
         NuclearShapeIrregularity(1.0),
         NuclearShapeIrregularity(1.5),
+        NuclearShapeIrregularity(2.0),
     ]

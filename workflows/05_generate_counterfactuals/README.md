@@ -165,3 +165,28 @@ For multiple VMs, give each a distinct `--shard-index` in
 `0..num-shards-1`, the same `--num-shards`, a distinct workspace disk, and a
 distinct output URI. Add `--dry-run` to validate all transformations without
 loading the diffusion model.
+
+## Bidirectional signed-SD extensions
+
+The SD-based experiment modules expose the complete ordered panel `-2, -1, 0,
++0.5, +1, +1.5, +2 SD`. Baseline is level 0. Negative inflammatory-density
+levels deterministically remove nested subsets of centroids; morphology-based
+experiments apply signed shifts to the declared standardized controls.
+
+For cohorts that already contain baseline through `+1.5 SD`, one command runs
+only the three missing levels (`-2`, `-1`, and `+2 SD`) for inflammatory
+centroid density, nuclear enlargement, and stain brightness. Because no full
+nuclear-shape-irregularity cohort exists in the bucket, the same batch creates
+its complete seven-condition panel:
+
+```bash
+uv run --extra inference python \
+  workflows/05_generate_counterfactuals/run_signed_sd_extensions.py \
+  --workspace /mnt/disks/cpathogen-sd-extensions
+```
+
+The job plan is `signed_sd_extensions_v2.json`. Extension outputs are kept
+under each existing dataset's `extensions/signed_extremes_v2/` prefix so the
+original manifests remain immutable. Each extension writes its own
+`images.csv`, `pairs.jsonl`, `run_manifest.json`, and `status.json`; downstream
+evaluation should union the base and extension manifests.

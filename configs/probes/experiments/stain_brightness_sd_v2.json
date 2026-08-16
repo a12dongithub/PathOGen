@@ -1,0 +1,9 @@
+{
+  "id": "stain_brightness_sd_v2",
+  "knob": "stain brightness",
+  "levels_sd": [-2.0, -1.0, 0.0, 0.5, 1.0, 1.5, 2.0],
+  "base_dataset_uri": "gs://cpathogen_artifacts/outputs/counterfactuals/stain_brightness/sd_v1/cohort_1000/20260816-053143",
+  "extension_uri": "gs://cpathogen_artifacts/outputs/counterfactuals/stain_brightness/sd_v1/cohort_1000/20260816-053143/extensions/signed_extremes_v2",
+  "changed_controls": ["morphology.r_mean", "morphology.g_mean", "morphology.b_mean"],
+  "version": "sd_v2"
+}

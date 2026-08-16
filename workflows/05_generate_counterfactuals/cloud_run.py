@@ -25,8 +25,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-uri", required=True)
     parser.add_argument(
         "--experiment",
-        default="experiments.spatial.inflammatory_signal_mass",
+        default="experiments.spatial.inflammatory_centroid_density",
     )
+    parser.add_argument("--intervention", action="append", dest="interventions")
+    parser.add_argument("--omit-baseline", action="store_true")
     parser.add_argument("--workspace", type=Path, default=Path("/mnt/disks/cpathogen"))
     parser.add_argument("--data-sha256")
     parser.add_argument("--checkpoint-sha256")
@@ -101,7 +103,10 @@ class ProgressUploader:
                 manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
                 candidates = int(manifest["data"]["candidate_count"])
                 interventions = len(manifest["experiment"]["interventions"])
-                expected_png_count = candidates * (interventions + 1)
+                baseline_count = int(
+                    bool(manifest.get("generation", {}).get("baseline_generated", True))
+                )
+                expected_png_count = candidates * (interventions + baseline_count)
             except (KeyError, TypeError, ValueError, json.JSONDecodeError):
                 pass
         return {
@@ -259,6 +264,10 @@ def main() -> None:
             "--output-dir",
             str(outputs),
         ]
+        for intervention in args.interventions or []:
+            command.extend(["--intervention", intervention])
+        if args.omit_baseline:
+            command.append("--omit-baseline")
         if args.dry_run:
             command.append("--dry-run")
         uploader.update("generating")

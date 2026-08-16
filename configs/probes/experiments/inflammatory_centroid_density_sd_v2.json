@@ -1,0 +1,11 @@
+{
+  "id": "inflammatory_centroid_density_sd_v2",
+  "display_name": "Inflammatory centroid density (bidirectional)",
+  "knob": "square-root inflammatory nucleus count",
+  "levels": [-2.0, -1.0, 0.0, 0.5, 1.0, 1.5, 2.0],
+  "unit": "reference standard deviations",
+  "candidate_count": 1000,
+  "base_dataset_uri": "gs://cpathogen_artifacts/inputs/counterfactuals/inflammatory_centroid_density/sd_v1/cohort_1000/generated.zip",
+  "extension_uri": "gs://cpathogen_artifacts/inputs/counterfactuals/inflammatory_centroid_density/sd_v1/cohort_1000/extensions/signed_extremes_v2",
+  "version": "sd_v2"
+}

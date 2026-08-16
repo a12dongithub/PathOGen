@@ -18,10 +18,11 @@ class NuclearEnlargement(ConditionIntervention):
 
     def __init__(self, sd_steps: float) -> None:
         self.sd_steps = float(sd_steps)
-        if self.sd_steps <= 0.0:
-            raise ValueError("sd_steps must be positive")
-        label = str(self.sd_steps).replace(".", "p")
-        self.name = f"nuclear_enlargement_plus_{label}sd"
+        if self.sd_steps == 0.0:
+            raise ValueError("sd_steps must be non-zero; baseline represents zero")
+        label = str(abs(self.sd_steps)).replace(".", "p")
+        direction = "plus" if self.sd_steps > 0 else "minus"
+        self.name = f"nuclear_enlargement_{direction}_{label}sd"
 
     def parameters(self) -> dict[str, Any]:
         return {
@@ -55,7 +56,10 @@ class NuclearEnlargement(ConditionIntervention):
 
 def build_interventions() -> list[ConditionIntervention]:
     return [
+        NuclearEnlargement(-2.0),
+        NuclearEnlargement(-1.0),
         NuclearEnlargement(0.5),
         NuclearEnlargement(1.0),
         NuclearEnlargement(1.5),
+        NuclearEnlargement(2.0),
     ]

@@ -1,0 +1,74 @@
+{
+  "schema_version": 1,
+  "description": "Complete the bidirectional signed-SD panels for the 1,000-candidate datasets.",
+  "jobs": [
+    {
+      "name": "inflammatory_centroid_density_0000_0299",
+      "experiment": "experiments.spatial.inflammatory_centroid_density",
+      "data_uri": "gs://cpathogen_artifacts/inputs/inflammatory_centroid_density_sd_v1/cpathogen_inflammatory_centroid_density_300_data.zip",
+      "output_uri": "gs://cpathogen_artifacts/inputs/counterfactuals/inflammatory_centroid_density/sd_v1/cohort_1000/extensions/signed_extremes_v2/part_0000_0299",
+      "candidate_count": 300,
+      "omit_baseline": true,
+      "interventions": [
+        "inflammatory_centroids_minus_2p0sd",
+        "inflammatory_centroids_minus_1p0sd",
+        "inflammatory_centroids_plus_2p0sd"
+      ]
+    },
+    {
+      "name": "inflammatory_centroid_density_0300_0999",
+      "experiment": "experiments.spatial.inflammatory_centroid_density",
+      "data_uri": "gs://cpathogen_artifacts/inputs/inflammatory_centroid_density_sd_v1_remaining_700/cpathogen_inflammatory_centroid_density_700_data.zip",
+      "output_uri": "gs://cpathogen_artifacts/inputs/counterfactuals/inflammatory_centroid_density/sd_v1/cohort_1000/extensions/signed_extremes_v2/part_0300_0999",
+      "candidate_count": 700,
+      "omit_baseline": true,
+      "interventions": [
+        "inflammatory_centroids_minus_2p0sd",
+        "inflammatory_centroids_minus_1p0sd",
+        "inflammatory_centroids_plus_2p0sd"
+      ]
+    },
+    {
+      "name": "nuclear_enlargement",
+      "experiment": "experiments.spatial.nuclear_enlargement",
+      "data_uri": "gs://cpathogen_artifacts/inputs/generation/cohort_1000_v1/data.zip",
+      "output_uri": "gs://cpathogen_artifacts/outputs/counterfactuals/nuclear_enlargement/sd_v1/cohort_1000/20260816-0230/extensions/signed_extremes_v2",
+      "candidate_count": 1000,
+      "omit_baseline": true,
+      "interventions": [
+        "nuclear_enlargement_minus_2p0sd",
+        "nuclear_enlargement_minus_1p0sd",
+        "nuclear_enlargement_plus_2p0sd"
+      ]
+    },
+    {
+      "name": "nuclear_shape_irregularity_full_panel",
+      "experiment": "experiments.spatial.nuclear_shape_irregularity",
+      "data_uri": "gs://cpathogen_artifacts/inputs/generation/cohort_1000_v1/data.zip",
+      "output_uri": "gs://cpathogen_artifacts/outputs/counterfactuals/nuclear_shape_irregularity/sd_v2/cohort_1000/full_signed_panel",
+      "candidate_count": 1000,
+      "omit_baseline": false,
+      "interventions": [
+        "nuclear_shape_irregularity_minus_2p0sd",
+        "nuclear_shape_irregularity_minus_1p0sd",
+        "nuclear_shape_irregularity_plus_0p5sd",
+        "nuclear_shape_irregularity_plus_1p0sd",
+        "nuclear_shape_irregularity_plus_1p5sd",
+        "nuclear_shape_irregularity_plus_2p0sd"
+      ]
+    },
+    {
+      "name": "stain_brightness",
+      "experiment": "experiments.spatial.stain_brightness",
+      "data_uri": "gs://cpathogen_artifacts/inputs/generation/cohort_1000_v1/data.zip",
+      "output_uri": "gs://cpathogen_artifacts/outputs/counterfactuals/stain_brightness/sd_v1/cohort_1000/20260816-053143/extensions/signed_extremes_v2",
+      "candidate_count": 1000,
+      "omit_baseline": true,
+      "interventions": [
+        "stain_brightness_minus_2p0sd",
+        "stain_brightness_minus_1p0sd",
+        "stain_brightness_plus_2p0sd"
+      ]
+    }
+  ]
+}

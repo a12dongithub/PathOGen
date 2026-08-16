@@ -100,12 +100,41 @@ def sd_target_count(original_count: int, sd_steps: float, sqrt_count_sd: float) 
     """Shift sqrt(count) by a reference SD and map back to an integer count."""
     if original_count < 1:
         raise ValueError("At least one original inflammatory centroid is required")
-    if sd_steps <= 0.0:
-        raise ValueError("sd_steps must be positive")
+    if sd_steps == 0.0:
+        return original_count
     if sqrt_count_sd <= 0.0:
         raise ValueError("sqrt_count_sd must be positive")
-    shifted = math.sqrt(original_count) + sd_steps * sqrt_count_sd
+    # A count cannot be negative and the spatial encoder requires at least one
+    # centroid.  Record the achieved SD in experiment metadata when this floor
+    # prevents a low-count tile from reaching a requested negative dose.
+    shifted = max(1.0, math.sqrt(original_count) + sd_steps * sqrt_count_sd)
     return math.floor(shifted**2 + 0.5)
+
+
+def remove_centroids(
+    original: np.ndarray,
+    removal_count: int,
+    *,
+    rng: random.Random,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Remove a deterministic nested subset while retaining at least one nucleus."""
+    original = np.asarray(original, dtype=np.int16).reshape(-1, 2)
+    if removal_count < 1:
+        raise ValueError("removal_count must be positive")
+    if removal_count >= len(original):
+        raise ValueError("At least one inflammatory centroid must remain")
+    removal_order = list(range(len(original)))
+    rng.shuffle(removal_order)
+    removed_indices = set(removal_order[:removal_count])
+    retained = np.asarray(
+        [point for index, point in enumerate(original) if index not in removed_indices],
+        dtype=np.int16,
+    ).reshape(-1, 2)
+    removed = np.asarray(
+        [original[index] for index in removal_order[:removal_count]],
+        dtype=np.int16,
+    ).reshape(-1, 2)
+    return retained, removed
 
 
 def add_jittered_centroids(

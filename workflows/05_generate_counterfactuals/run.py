@@ -105,6 +105,14 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Validate and apply interventions without loading the diffusion model.",
     )
+    parser.add_argument(
+        "--omit-baseline",
+        action="store_true",
+        help=(
+            "Generate only selected interventions when extending a dataset whose "
+            "matched baseline images already exist."
+        ),
+    )
     args = parser.parse_args()
     if args.num_tiles < 1:
         parser.error("--num-tiles must be at least 1")
@@ -376,6 +384,7 @@ def main() -> None:
             "requested_device": args.device,
             "requested_dtype": args.dtype,
             "matched_initial_noise": True,
+            "baseline_generated": not args.omit_baseline,
         },
     }
     _json_write(output_dir / "run_manifest.json", manifest)
@@ -442,33 +451,48 @@ def main() -> None:
         seed_dir.mkdir(parents=True, exist_ok=True)
         baseline_path = seed_dir / "baseline.png"
         pending = list(applied_items)
-        first_capacity = max(0, args.batch_size - 1)
-        first_items = pending[:first_capacity]
-        pending = pending[first_capacity:]
-        first_conditions = [original] + [item[1].condition for item in first_items]
-        first_images = generate_matched_conditions(
-            models,
-            first_conditions,
-            seed=seed,
-            prompt=args.prompt,
-            num_inference_steps=args.steps,
-            spatial_strength=args.spatial_strength,
-            matched_noise=True,
-        )
-        _save_png(first_images[0], baseline_path)
-        _append_image_manifest(
-            images_manifest_path,
-            {
-                "candidate_id": candidate.candidate_id,
-                "stem": stem,
-                "seed": seed,
-                "condition": "baseline",
-                "intervention_parameters": "{}",
-                "image_path": str(baseline_path),
-            },
-        )
-        image_count += 1
-        generated_groups = [(first_items, first_images[1:])]
+        generated_groups = []
+        if args.omit_baseline:
+            first_items = pending[: args.batch_size]
+            pending = pending[args.batch_size :]
+            first_images = generate_matched_conditions(
+                models,
+                [item[1].condition for item in first_items],
+                seed=seed,
+                prompt=args.prompt,
+                num_inference_steps=args.steps,
+                spatial_strength=args.spatial_strength,
+                matched_noise=True,
+            )
+            generated_groups.append((first_items, first_images))
+        else:
+            first_capacity = max(0, args.batch_size - 1)
+            first_items = pending[:first_capacity]
+            pending = pending[first_capacity:]
+            first_conditions = [original] + [item[1].condition for item in first_items]
+            first_images = generate_matched_conditions(
+                models,
+                first_conditions,
+                seed=seed,
+                prompt=args.prompt,
+                num_inference_steps=args.steps,
+                spatial_strength=args.spatial_strength,
+                matched_noise=True,
+            )
+            _save_png(first_images[0], baseline_path)
+            _append_image_manifest(
+                images_manifest_path,
+                {
+                    "candidate_id": candidate.candidate_id,
+                    "stem": stem,
+                    "seed": seed,
+                    "condition": "baseline",
+                    "intervention_parameters": "{}",
+                    "image_path": str(baseline_path),
+                },
+            )
+            image_count += 1
+            generated_groups.append((first_items, first_images[1:]))
         while pending:
             group = pending[: args.batch_size]
             pending = pending[args.batch_size :]

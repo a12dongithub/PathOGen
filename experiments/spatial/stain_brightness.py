@@ -10,7 +10,9 @@ from cpathogen.counterfactuals import ConditionIntervention, InterventionContext
 from cpathogen.counterfactuals.conditions import MORPHOLOGY_FEATURE_NAMES
 
 RGB_MEAN_NAMES = ("r_mean", "g_mean", "b_mean")
-RGB_MEAN_INDICES = tuple(MORPHOLOGY_FEATURE_NAMES.index(name) for name in RGB_MEAN_NAMES)
+RGB_MEAN_INDICES = tuple(
+    MORPHOLOGY_FEATURE_NAMES.index(name) for name in RGB_MEAN_NAMES
+)
 
 
 class StainBrightnessIncrease(ConditionIntervention):
@@ -18,18 +20,25 @@ class StainBrightnessIncrease(ConditionIntervention):
 
     def __init__(self, sd_steps: float) -> None:
         self.sd_steps = float(sd_steps)
-        if self.sd_steps <= 0.0:
-            raise ValueError("sd_steps must be positive")
-        label = str(self.sd_steps).replace(".", "p")
-        self.name = f"stain_brightness_plus_{label}sd"
+        if self.sd_steps == 0.0:
+            raise ValueError("sd_steps must be non-zero; baseline represents zero")
+        label = str(abs(self.sd_steps)).replace(".", "p")
+        direction = "plus" if self.sd_steps > 0 else "minus"
+        self.name = f"stain_brightness_{direction}_{label}sd"
 
     def parameters(self) -> dict[str, Any]:
         return {
             "sd_steps": self.sd_steps,
             "feature_space": "training-standardized z scores",
-            "increased_features": list(RGB_MEAN_NAMES),
+            ("increased_features" if self.sd_steps > 0 else "decreased_features"): list(
+                RGB_MEAN_NAMES
+            ),
             "preserved_features": ["r_var", "g_var", "b_var"],
-            "direction": "brighter / higher RGB intensity",
+            "direction": (
+                "brighter / higher RGB intensity"
+                if self.sd_steps > 0
+                else "darker / lower RGB intensity"
+            ),
         }
 
     def modify_morphology(
@@ -58,7 +67,10 @@ class StainBrightnessIncrease(ConditionIntervention):
 
 def build_interventions() -> list[ConditionIntervention]:
     return [
+        StainBrightnessIncrease(-2.0),
+        StainBrightnessIncrease(-1.0),
         StainBrightnessIncrease(0.5),
         StainBrightnessIncrease(1.0),
         StainBrightnessIncrease(1.5),
+        StainBrightnessIncrease(2.0),
     ]

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+import numpy as np
+
 from cpathogen.counterfactuals import (
     AppliedIntervention,
     ConditionBundle,
@@ -15,6 +17,7 @@ from cpathogen.counterfactuals.centroids import (
     centroid_sha256,
     load_centroid_reference_stats,
     load_inflammatory_centroids,
+    remove_centroids,
     render_centroid_channel,
     sd_target_count,
 )
@@ -23,15 +26,16 @@ INFLAMMATORY_CHANNEL = 1
 RNG_NAMESPACE = "inflammatory-centroid-density-v1"
 
 
-class InflammatoryCentroidDensityIncrease(ConditionIntervention):
-    """Add nuclei near existing inflammatory regions and rebuild the map channel."""
+class InflammatoryCentroidDensityShift(ConditionIntervention):
+    """Shift inflammatory count and rebuild the encoded spatial-map channel."""
 
     def __init__(self, sd_steps: float) -> None:
         self.sd_steps = float(sd_steps)
-        if self.sd_steps <= 0.0:
-            raise ValueError("sd_steps must be positive")
-        label = str(self.sd_steps).replace(".", "p")
-        self.name = f"inflammatory_centroids_plus_{label}sd"
+        if self.sd_steps == 0.0:
+            raise ValueError("sd_steps must be non-zero; baseline represents zero")
+        label = str(abs(self.sd_steps)).replace(".", "p")
+        direction = "plus" if self.sd_steps > 0 else "minus"
+        self.name = f"inflammatory_centroids_{direction}_{label}sd"
 
     def parameters(self) -> dict[str, Any]:
         return {
@@ -54,12 +58,23 @@ class InflammatoryCentroidDensityIncrease(ConditionIntervention):
         reference = load_centroid_reference_stats(context.store.data_root)
         sqrt_count_sd = float(reference["sqrt_count_sd"])
         target_count = sd_target_count(len(centroids), self.sd_steps, sqrt_count_sd)
-        addition_count = target_count - len(centroids)
-        combined, added = add_jittered_centroids(
-            centroids,
-            addition_count,
-            rng=context.rng(RNG_NAMESPACE),
-        )
+        count_delta = target_count - len(centroids)
+        added = np.empty((0, 2), dtype=np.int16)
+        removed = np.empty((0, 2), dtype=np.int16)
+        if count_delta > 0:
+            combined, added = add_jittered_centroids(
+                centroids,
+                count_delta,
+                rng=context.rng(RNG_NAMESPACE),
+            )
+        elif count_delta < 0:
+            combined, removed = remove_centroids(
+                centroids,
+                -count_delta,
+                rng=context.rng(RNG_NAMESPACE),
+            )
+        else:
+            combined = centroids.copy()
         spatial = original.spatial.detach().clone()
         spatial[INFLAMMATORY_CHANNEL] = render_centroid_channel(combined)
         converted = ConditionBundle(
@@ -84,19 +99,27 @@ class InflammatoryCentroidDensityIncrease(ConditionIntervention):
                 "reference_count": int(reference["reference_count"]),
                 "original_centroid_count": len(centroids),
                 "added_centroid_count": len(added),
+                "removed_centroid_count": len(removed),
                 "resulting_centroid_count": len(combined),
                 "achieved_sd_steps": (
                     (len(combined) ** 0.5 - len(centroids) ** 0.5) / sqrt_count_sd
                 ),
                 "added_centroids_sha256": centroid_sha256(added),
+                "removed_centroids_sha256": centroid_sha256(removed),
                 "placement_rng_namespace": RNG_NAMESPACE,
             },
         )
 
 
+InflammatoryCentroidDensityIncrease = InflammatoryCentroidDensityShift
+
+
 def build_interventions() -> list[ConditionIntervention]:
     return [
-        InflammatoryCentroidDensityIncrease(0.5),
-        InflammatoryCentroidDensityIncrease(1.0),
-        InflammatoryCentroidDensityIncrease(1.5),
+        InflammatoryCentroidDensityShift(-2.0),
+        InflammatoryCentroidDensityShift(-1.0),
+        InflammatoryCentroidDensityShift(0.5),
+        InflammatoryCentroidDensityShift(1.0),
+        InflammatoryCentroidDensityShift(1.5),
+        InflammatoryCentroidDensityShift(2.0),
     ]

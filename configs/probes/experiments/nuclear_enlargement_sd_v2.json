@@ -1,0 +1,9 @@
+{
+  "id": "nuclear_enlargement_sd_v2",
+  "knob": "mean nuclear size",
+  "levels_sd": [-2.0, -1.0, 0.0, 0.5, 1.0, 1.5, 2.0],
+  "base_dataset_uri": "gs://cpathogen_artifacts/outputs/counterfactuals/nuclear_enlargement/sd_v1/cohort_1000/20260816-0230",
+  "extension_uri": "gs://cpathogen_artifacts/outputs/counterfactuals/nuclear_enlargement/sd_v1/cohort_1000/20260816-0230/extensions/signed_extremes_v2",
+  "changed_controls": ["morphology.area_mean", "morphology.perimeter_mean"],
+  "version": "sd_v2"
+}
