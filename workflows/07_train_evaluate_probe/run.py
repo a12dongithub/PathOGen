@@ -48,6 +48,7 @@ def parse_args() -> argparse.Namespace:
         help="GCS prefix recorded in the final prediction table.",
     )
     parser.add_argument("--expected-counterfactual-candidates", type=int)
+    parser.add_argument("--counterfactual-archive-member-prefix", default="")
     parser.add_argument("--ctranspath-checkpoint", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--batch-size", type=int, default=64)
@@ -467,8 +468,10 @@ def main() -> None:
         source_prefix = args.counterfactual_source_uri.rstrip("/")
         results["counterfactual_source_uri"] = source_prefix
         if source_prefix.endswith(".zip"):
-            results["counterfactual_archive_member"] = results[
-                "relative_image_path"
+            archive_prefix = Path(args.counterfactual_archive_member_prefix)
+            results["counterfactual_archive_member"] = [
+                str(archive_prefix / relative)
+                for relative in results["relative_image_path"]
             ]
             results["counterfactual_gcs_uri"] = pd.NA
         else:
@@ -582,6 +585,10 @@ def main() -> None:
         "encoder": "CTransPath",
         "encoder_frozen": True,
         "head": "L2-regularized logistic regression",
+        "counterfactual_source_uri": args.counterfactual_source_uri,
+        "counterfactual_archive_member_prefix": (
+            args.counterfactual_archive_member_prefix or None
+        ),
         "training_manifest_sha256": sha256(inputs.training_manifest),
         "counterfactual_manifest_sha256": sha256(inputs.counterfactual_manifest),
         "outputs": {

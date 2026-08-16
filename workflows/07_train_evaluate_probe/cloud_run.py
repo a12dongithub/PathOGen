@@ -226,6 +226,11 @@ def main() -> None:
                 ]
             )
         counterfactual_root = dataset_root(counterfactual_container, "images.csv")
+        archive_member_prefix = (
+            str(counterfactual_root.relative_to(counterfactual_container))
+            if args.counterfactual_uri.endswith(".zip")
+            else ""
+        )
         manifest_rows, candidate_count = counterfactual_counts(counterfactual_root)
         image_count = sum(1 for _ in counterfactual_root.glob("images/**/*.png"))
         if image_count != manifest_rows:
@@ -279,6 +284,10 @@ def main() -> None:
             "--expected-counterfactual-candidates",
             str(candidate_count),
         ]
+        if archive_member_prefix:
+            command.extend(
+                ["--counterfactual-archive-member-prefix", archive_member_prefix]
+            )
         run(command)
         upload_model_artifacts(outputs, args.model_output_uri)
         write_status(
