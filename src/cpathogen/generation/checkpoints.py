@@ -22,6 +22,7 @@ REQUIRED_PHASE2_PATHS = (
     Path("spatial_encoder.pt"),
     Path("film_mlps.pt"),
 )
+DEFAULT_BASE_MODEL = "Manojb/stable-diffusion-2-1-base"
 
 
 @dataclass(frozen=True)
@@ -185,7 +186,8 @@ def load_phase2_conditioning_models(
 
     return Phase2ConditioningModels(
         checkpoint_dir=checkpoint_dir,
-        base_model=unet_config.get("_name_or_path", "Manojb/stable-diffusion-2-1-base"),
+        # Diffusers may serialize this field as null or an empty string.
+        base_model=unet_config.get("_name_or_path") or DEFAULT_BASE_MODEL,
         unet=unet,
         spatial_encoder=spatial_encoder,
         film_mlps=film_mlps,
@@ -230,6 +232,17 @@ def load_phase2_generation_models(
         revision = None
     else:
         resolved_base_model = base_model or conditioning.base_model
+    if (
+        local_files_only
+        and not bundled_base_components
+        and not Path(resolved_base_model).expanduser().is_dir()
+    ):
+        raise FileNotFoundError(
+            "The checkpoint does not bundle tokenizer/, text_encoder/, and "
+            "scheduler/, but local-only loading was requested. Remove "
+            "--local-files-only once so the frozen base-model components can "
+            f"be downloaded from {resolved_base_model!r}."
+        )
     common_kwargs: dict[str, object] = {
         "local_files_only": local_files_only,
     }

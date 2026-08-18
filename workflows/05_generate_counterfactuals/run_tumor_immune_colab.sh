@@ -45,7 +45,6 @@ COMMON_ARGS=(
   --batch-size "$BATCH_SIZE"
   --device cuda
   --dtype float16
-  --local-files-only
   --omit-baseline
   --tile-folder-layout
   --resume

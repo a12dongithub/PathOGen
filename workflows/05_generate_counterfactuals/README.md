@@ -223,6 +223,13 @@ The data root must contain `spatial_maps/`, `geojsons/`, and the standardized
 morphology parquet. The checkpoint argument must point at the directory that
 directly contains `unet/config.json`.
 
+The distributed training checkpoint does not contain the frozen SD tokenizer,
+text encoder, or noise scheduler. On a fresh Colab runtime the launcher allows
+Transformers/Diffusers to download those components from the base-model ID in
+`unet/config.json`; subsequent loads use the Hugging Face cache. Do not add
+`--local-files-only` unless those components have been bundled into the
+checkpoint or already exist in the runtime cache.
+
 After cloning the branch and installing `.[inference]`, run both experiments:
 
 ```bash
