@@ -203,16 +203,21 @@ stored uint8 neoplastic and inflammatory training controls.
 Two experiments use that same cohort:
 
 1. `experiments.spatial.peritumoral_immune_ring` adds nested sets of 80, 160,
-   and 320 inflammatory centroids in a 24 px outer tumor ring. Original and
-   added centroids are jointly rerendered using the training-time sigma-3,
-   peak-normalized encoder. With no generated baseline this is 3,000 PNGs. A
-   baseline plus these three interventions would be four conditions and 4,000
-   PNGs.
+   and 320 inflammatory centroids. A tumor nucleus is defined as 40 px in
+   diameter (20 px radius); immune centroids are placed in the 20--60 px
+   nearest-tumor-centroid annulus, giving a one-tumor-diameter-wide outer ring.
+   Original and added centroids are jointly rerendered using the training-time
+   sigma-3, peak-normalized encoder. With no generated baseline this is 3,000
+   PNGs. A baseline plus these three interventions would be four conditions and
+   4,000 PNGs.
 2. `experiments.spatial.tumor_immune_mixing` relocates the exact original
    inflammatory centroid count through five ordered nearest-tumor-distance
-   bands, from maximal mixing to maximal segregation. Tumor centroids, all
-   other spatial channels, morphology, and the selected generation seed remain
-   fixed within each panel. With no generated baseline this is 5,000 PNGs.
+   bands, from maximal mixing to maximal segregation. Candidate immune
+   centroids must remain at least the 20 px tumor radius from a tumor centroid.
+   The 6 px lattice is an immune-control sampling resolution, not a tumor-size
+   estimate. Tumor centroids, all other spatial channels, morphology, and the
+   selected generation seed remain fixed within each panel. With no generated
+   baseline this is 5,000 PNGs.
 
 The data root must contain `spatial_maps/`, `geojsons/`, and the standardized
 morphology parquet. The checkpoint argument must point at the directory that
@@ -224,7 +229,7 @@ After cloning the branch and installing `.[inference]`, run both experiments:
 bash workflows/05_generate_counterfactuals/run_tumor_immune_colab.sh \
   /content/cpathogen_inputs/512_final_dataset \
   /content/cpathogen_inputs/checkpoint-30000_FID58/checkpoint-30000 \
-  /content/drive/MyDrive/PathOGenResults/tumor_immune_spatial_v2 \
+  /content/drive/MyDrive/PathOGenResults/tumor_immune_spatial_v3 \
   8
 ```
 

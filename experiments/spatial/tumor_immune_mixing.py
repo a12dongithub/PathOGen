@@ -8,7 +8,6 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-from scipy.ndimage import distance_transform_edt
 from torch import Tensor
 
 from cpathogen.counterfactuals import (
@@ -18,13 +17,18 @@ from cpathogen.counterfactuals import (
     render_centroid_channel,
 )
 from cpathogen.counterfactuals.centroids import IMAGE_SIZE, centroid_sha256
+from experiments.spatial._tumor_immune_pilot_utils import (
+    TUMOR_NUCLEUS_DIAMETER_PX,
+    TUMOR_NUCLEUS_RADIUS_PX,
+    nearest_centroid_distance_map,
+)
 
 TUMOR_CHANNEL = 0
 INFLAMMATORY_CHANNEL = 1
-RNG_NAMESPACE = "tumor-immune-centroid-separation-v2"
+RNG_NAMESPACE = "tumor-immune-centroid-separation-v3-tumor-diameter-40px"
 GRID_SPACING_PX = 6
 GRID_JITTER_PX = 1
-MINIMUM_TUMOR_DISTANCE_PX = 4.0
+MINIMUM_TUMOR_DISTANCE_PX = TUMOR_NUCLEUS_RADIUS_PX
 DISTANCE_QUANTILE_WINDOW = 0.20
 
 # Zero is maximally mixed under the no-overlapping-centroid constraint; one is
@@ -64,15 +68,6 @@ def _candidate_lattice(rng: random.Random) -> np.ndarray:
             if 0 <= x < IMAGE_SIZE and 0 <= y < IMAGE_SIZE:
                 points.append((x, y))
     return np.asarray(points, dtype=np.int16).reshape(-1, 2)
-
-
-def _nearest_tumor_distance_map(tumor_centroids: np.ndarray) -> np.ndarray:
-    tumor_centroids = np.asarray(tumor_centroids, dtype=np.int16).reshape(-1, 2)
-    if len(tumor_centroids) == 0:
-        raise ValueError("At least one neoplastic centroid is required")
-    non_tumor = np.ones((IMAGE_SIZE, IMAGE_SIZE), dtype=bool)
-    non_tumor[tumor_centroids[:, 1], tumor_centroids[:, 0]] = False
-    return distance_transform_edt(non_tumor)
 
 
 def _select_distance_quantile_band(
@@ -130,7 +125,7 @@ def _relocated_centroids_cached(
 
     rng = random.Random(rng_seed)
     candidates = _candidate_lattice(rng)
-    distance_map = _nearest_tumor_distance_map(tumor)
+    distance_map = nearest_centroid_distance_map(tumor).numpy()
     candidate_distances = distance_map[candidates[:, 1], candidates[:, 0]]
     valid = candidate_distances >= MINIMUM_TUMOR_DISTANCE_PX
     candidates = candidates[valid]
@@ -182,6 +177,8 @@ class TumorImmuneCentroidSeparation(ConditionIntervention):
         return {
             "pattern": self.label,
             "separation_fraction": self.separation_fraction,
+            "tumor_nucleus_diameter_px": TUMOR_NUCLEUS_DIAMETER_PX,
+            "tumor_nucleus_radius_px": TUMOR_NUCLEUS_RADIUS_PX,
             "distance_definition": (
                 "inflammatory-centroid to nearest neoplastic-centroid"
             ),

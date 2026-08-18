@@ -6,13 +6,54 @@ import random
 
 import numpy as np
 import torch
-from scipy.ndimage import maximum_filter
+from scipy.ndimage import distance_transform_edt, maximum_filter
 from torch import Tensor
 
-from cpathogen.counterfactuals.centroids import render_centroid_channel
+from cpathogen.counterfactuals.centroids import IMAGE_SIZE, render_centroid_channel
 
 TUMOR_CHANNEL = 0
 INFLAMMATORY_CHANNEL = 1
+TUMOR_NUCLEUS_DIAMETER_PX = 40.0
+TUMOR_NUCLEUS_RADIUS_PX = TUMOR_NUCLEUS_DIAMETER_PX / 2.0
+PERITUMORAL_RING_WIDTH_PX = TUMOR_NUCLEUS_DIAMETER_PX
+
+
+def nearest_centroid_distance_map(centroids: np.ndarray) -> Tensor:
+    """Return each pixel's Euclidean distance to the nearest supplied centroid."""
+    points = np.asarray(centroids, dtype=np.int16).reshape(-1, 2)
+    if len(points) == 0:
+        raise ValueError("At least one centroid is required")
+    if (
+        np.any(points[:, 0] < 0)
+        or np.any(points[:, 0] >= IMAGE_SIZE)
+        or np.any(points[:, 1] < 0)
+        or np.any(points[:, 1] >= IMAGE_SIZE)
+    ):
+        raise ValueError("Centroids must lie inside the 512 x 512 tile")
+    non_centroid = np.ones((IMAGE_SIZE, IMAGE_SIZE), dtype=bool)
+    non_centroid[points[:, 1], points[:, 0]] = False
+    distances = distance_transform_edt(non_centroid).astype(np.float32)
+    return torch.from_numpy(distances)
+
+
+def tumor_centroid_annulus_weights(
+    tumor_centroids: np.ndarray,
+    *,
+    inner_radius_px: float = TUMOR_NUCLEUS_RADIUS_PX,
+    width_px: float = PERITUMORAL_RING_WIDTH_PX,
+) -> Tensor:
+    """Return a one-diameter-wide ring outside the assumed tumor radius."""
+    if inner_radius_px < 0.0:
+        raise ValueError("inner_radius_px cannot be negative")
+    if width_px <= 0.0:
+        raise ValueError("width_px must be positive")
+    distances = nearest_centroid_distance_map(tumor_centroids)
+    outer_radius_px = inner_radius_px + width_px
+    ring = (distances >= inner_radius_px) & (distances <= outer_radius_px)
+    weights = ring.to(dtype=torch.float32)
+    if float(weights.sum()) <= 0.0:
+        raise ValueError("Could not construct a peritumoral centroid annulus")
+    return weights
 
 
 def normalized_weights(values: Tensor) -> Tensor:

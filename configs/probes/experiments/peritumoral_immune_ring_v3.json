@@ -1,5 +1,5 @@
 {
-  "id": "peritumoral_immune_ring_v2",
+  "id": "peritumoral_immune_ring_v3",
   "knob": "peritumoral inflammatory-cell addition",
   "levels_added_centroids": [0, 80, 160, 320],
   "changed_controls": ["spatial.inflammatory_centroids"],
@@ -11,7 +11,8 @@
     "morphology",
     "generation_seed"
   ],
-  "target": "24 px outer band around spatial.neoplastic >= 0.25",
+  "tumor_nucleus_diameter_px": 40,
+  "target": "nearest-neoplastic-centroid annulus from 20 px to 60 px: one 20 px tumor radius plus one 40 px tumor-diameter ring width",
   "render": "original and added inflammatory centroids jointly rendered with sigma 3 and training-time peak normalization",
-  "version": "v2"
+  "version": "v3"
 }

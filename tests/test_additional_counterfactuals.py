@@ -151,6 +151,7 @@ def test_tumor_immune_mixing_preserves_exact_counts_and_orders_distance(
         assert applied.details["neoplastic_centroid_count_after"] == 25
         assert applied.details["inflammatory_centroid_count_before"] == 12
         assert applied.details["inflammatory_centroid_count_after"] == 12
+        assert applied.details["median_nearest_tumor_distance_after_px"] >= 20.0
         distances.append(applied.details["median_nearest_tumor_distance_after_px"])
         hashes.append(applied.details["relocated_inflammatory_centroids_sha256"])
     assert distances == sorted(distances)

@@ -1,5 +1,5 @@
 {
-  "id": "tumor_immune_centroid_separation_v2",
+  "id": "tumor_immune_centroid_separation_v3",
   "knob": "tumor-immune centroid separation",
   "levels": [
     {"name": "maximal_mixing", "separation_fraction": 0.0},
@@ -19,6 +19,8 @@
     "generation_seed"
   ],
   "distance_definition": "inflammatory centroid to nearest neoplastic centroid in pixels",
+  "tumor_nucleus_diameter_px": 40,
+  "minimum_inflammatory_to_neoplastic_centroid_distance_px": 20,
   "dose_definition": "moving 20% quantile window over valid nearest-tumor distances",
-  "version": "v2"
+  "version": "v3"
 }

@@ -35,7 +35,16 @@ def make_store(tmp_path: Path) -> ConditionStore:
     np.savez_compressed(maps / "tile.npz", map=spatial)
     geojsons = tmp_path / "geojsons"
     geojsons.mkdir()
-    features = []
+    features = [
+        {
+            "type": "Feature",
+            "geometry": {
+                "type": "Polygon",
+                "coordinates": [[[254, 254], [258, 254], [258, 258], [254, 258]]],
+            },
+            "properties": {"classification": {"name": "Neoplastic"}},
+        }
+    ]
     for x_value, y_value in inflammatory_centroids:
         x_value, y_value = int(x_value), int(y_value)
         features.append(
@@ -113,6 +122,8 @@ def test_peritumoral_ring_adds_exact_nested_counts(tmp_path: Path) -> None:
         assert applied.details["added_inflammatory_centroid_count"] == expected_addition
         assert applied.details["resulting_inflammatory_centroid_count"] == 5 + expected_addition
         assert applied.details["added_centroid_fraction_in_declared_ring"] == 1.0
+        assert applied.details["minimum_added_to_tumor_centroid_distance_px"] >= 20.0
+        assert applied.details["maximum_added_to_tumor_centroid_distance_px"] <= 60.0
         resulting_counts.append(
             applied.details["resulting_inflammatory_centroid_count"]
         )

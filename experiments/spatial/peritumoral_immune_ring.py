@@ -13,21 +13,25 @@ from torch import Tensor
 from cpathogen.counterfactuals import (
     ConditionIntervention,
     InterventionContext,
-    cell_centroids_from_geojson,
+    cell_centroids_by_class_from_geojson,
     render_centroid_channel,
 )
 from cpathogen.counterfactuals.centroids import centroid_sha256
 from experiments.spatial._tumor_immune_pilot_utils import (
     INFLAMMATORY_CHANNEL,
-    TUMOR_CHANNEL,
+    PERITUMORAL_RING_WIDTH_PX,
+    TUMOR_NUCLEUS_DIAMETER_PX,
+    TUMOR_NUCLEUS_RADIUS_PX,
     minimum_centroid_distance,
-    outer_tumor_ring_weights,
+    nearest_centroid_distance_map,
     sample_nested_centroids,
+    tumor_centroid_annulus_weights,
 )
 
-RNG_NAMESPACE = "peritumoral-immune-ring-v2"
-RING_RADIUS_PX = 24
-TUMOR_CORE_THRESHOLD = 0.25
+RNG_NAMESPACE = "peritumoral-immune-ring-v3-tumor-diameter-40px"
+RING_INNER_RADIUS_PX = TUMOR_NUCLEUS_RADIUS_PX
+RING_WIDTH_PX = PERITUMORAL_RING_WIDTH_PX
+RING_OUTER_RADIUS_PX = RING_INNER_RADIUS_PX + RING_WIDTH_PX
 
 
 def _geojson_path(context: InterventionContext) -> Path:
@@ -40,35 +44,24 @@ def _geojson_path(context: InterventionContext) -> Path:
     return path
 
 
-def _original_inflammatory(context: InterventionContext) -> np.ndarray:
-    centroids = cell_centroids_from_geojson(_geojson_path(context), "Inflammatory")
-    if len(centroids) == 0:
-        raise ValueError(
-            f"{context.original_stem} has no original inflammatory centroids"
-        )
-    return centroids
-
-
 @lru_cache(maxsize=4096)
 def _all_added_centroids_cached(
-    map_path_string: str,
     geojson_path_string: str,
     rng_seed: int,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    original = cell_centroids_from_geojson(
-        Path(geojson_path_string), "Inflammatory"
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    by_class = cell_centroids_by_class_from_geojson(Path(geojson_path_string))
+    tumor = by_class.get("Neoplastic", np.empty((0, 2), dtype=np.int16))
+    original = by_class.get(
+        "Inflammatory", np.empty((0, 2), dtype=np.int16)
     )
-    if len(original) == 0:
-        raise ValueError("At least one original inflammatory centroid is required")
-    with np.load(map_path_string, allow_pickle=False) as archive:
-        spatial_map = np.asarray(archive["map"], dtype=np.float32)
-    if spatial_map.max(initial=0.0) > 1.0:
-        spatial_map /= 255.0
-    tumor = Tensor(spatial_map[:, :, TUMOR_CHANNEL])
-    weights = outer_tumor_ring_weights(
+    if len(tumor) == 0 or len(original) == 0:
+        raise ValueError(
+            "At least one Neoplastic and one Inflammatory centroid are required"
+        )
+    weights = tumor_centroid_annulus_weights(
         tumor,
-        radius_px=RING_RADIUS_PX,
-        core_threshold=TUMOR_CORE_THRESHOLD,
+        inner_radius_px=RING_INNER_RADIUS_PX,
+        width_px=RING_WIDTH_PX,
     )
     added = sample_nested_centroids(
         weights,
@@ -76,16 +69,15 @@ def _all_added_centroids_cached(
         rng=random.Random(rng_seed),
         forbidden_centroids=original,
     )
-    return original, added, weights.numpy()
+    return tumor, original, added, weights.numpy()
 
 
 def _all_added_centroids(
     context: InterventionContext,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    map_path = context.store.spatial_maps_dir / f"{context.original_stem}.npz"
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     rng_seed = context.rng(RNG_NAMESPACE).getrandbits(64)
     return _all_added_centroids_cached(
-        str(map_path.resolve()), str(_geojson_path(context).resolve()), rng_seed
+        str(_geojson_path(context).resolve()), rng_seed
     )
 
 
@@ -101,8 +93,10 @@ class PeritumoralImmuneRing(ConditionIntervention):
     def parameters(self) -> dict[str, Any]:
         return {
             "added_inflammatory_centroids": self.centroid_count,
-            "ring_radius_px": RING_RADIUS_PX,
-            "tumor_core_threshold": TUMOR_CORE_THRESHOLD,
+            "tumor_nucleus_diameter_px": TUMOR_NUCLEUS_DIAMETER_PX,
+            "ring_inner_centroid_distance_px": RING_INNER_RADIUS_PX,
+            "ring_outer_centroid_distance_px": RING_OUTER_RADIUS_PX,
+            "ring_width_px": RING_WIDTH_PX,
             "preferred_minimum_centroid_distance_px": 5.0,
             "spatial_render_sigma_px": 3.0,
             "spatial_render_normalization": "joint peak normalization after addition",
@@ -118,13 +112,13 @@ class PeritumoralImmuneRing(ConditionIntervention):
 
     def _added_centroids(
         self, spatial: Tensor, context: InterventionContext
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         del spatial
-        original, all_added, weights = _all_added_centroids(context)
-        return original, all_added[: self.centroid_count], weights
+        tumor, original, all_added, weights = _all_added_centroids(context)
+        return tumor, original, all_added[: self.centroid_count], weights
 
     def modify_spatial(self, spatial: Tensor, context: InterventionContext) -> Tensor:
-        original, added, _ = self._added_centroids(spatial, context)
+        _, original, added, _ = self._added_centroids(spatial, context)
         combined = np.concatenate([original, added], axis=0)
         spatial[INFLAMMATORY_CHANNEL] = render_centroid_channel(combined).to(
             device=spatial.device
@@ -133,14 +127,27 @@ class PeritumoralImmuneRing(ConditionIntervention):
 
     def details(self, context: InterventionContext) -> dict[str, Any]:
         original_spatial = context.store.load_spatial(context.original_stem)
-        original, added, weights = self._added_centroids(original_spatial, context)
+        tumor, original, added, weights = self._added_centroids(
+            original_spatial, context
+        )
         combined = np.concatenate([original, added], axis=0)
         in_ring = [bool(weights[int(y), int(x)] > 0) for x, y in added]
+        distance_map = nearest_centroid_distance_map(tumor).numpy()
+        tumor_distances = distance_map[added[:, 1], added[:, 0]]
         return {
             "original_inflammatory_centroid_count": len(original),
             "added_inflammatory_centroid_count": len(added),
             "resulting_inflammatory_centroid_count": len(combined),
             "added_centroid_fraction_in_declared_ring": float(np.mean(in_ring)),
+            "minimum_added_to_tumor_centroid_distance_px": float(
+                tumor_distances.min()
+            ),
+            "median_added_to_tumor_centroid_distance_px": float(
+                np.median(tumor_distances)
+            ),
+            "maximum_added_to_tumor_centroid_distance_px": float(
+                tumor_distances.max()
+            ),
             "achieved_minimum_added_centroid_distance_px": minimum_centroid_distance(
                 added
             ),

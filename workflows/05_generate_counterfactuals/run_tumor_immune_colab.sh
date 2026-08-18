@@ -50,16 +50,16 @@ COMMON_ARGS=(
   --resume
 )
 
-echo "[1/2] Peritumoral ring: 1,000 tiles x 3 additions = 3,000 PNGs"
+echo "[1/2] Peritumoral ring (40 px tumor diameter): 1,000 x 3 = 3,000 PNGs"
 "$PYTHON_BIN" "$RUNNER" \
   --experiment experiments.spatial.peritumoral_immune_ring \
   "${COMMON_ARGS[@]}" \
-  --output-dir "$OUTPUT_ROOT/peritumoral_ring_v2"
+  --output-dir "$OUTPUT_ROOT/peritumoral_ring_v3_diameter40px"
 
-echo "[2/2] Fixed-count mixing/separation: 1,000 tiles x 5 levels = 5,000 PNGs"
+echo "[2/2] Fixed-count separation (40 px tumor diameter): 1,000 x 5 = 5,000 PNGs"
 "$PYTHON_BIN" "$RUNNER" \
   --experiment experiments.spatial.tumor_immune_mixing \
   "${COMMON_ARGS[@]}" \
-  --output-dir "$OUTPUT_ROOT/tumor_immune_separation_v2"
+  --output-dir "$OUTPUT_ROOT/tumor_immune_separation_v3_diameter40px"
 
 echo "Completed both experiments under: $OUTPUT_ROOT"
