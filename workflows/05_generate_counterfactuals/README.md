@@ -190,3 +190,52 @@ under each existing dataset's `extensions/signed_extremes_v2/` prefix so the
 original manifests remain immutable. Each extension writes its own
 `images.csv`, `pairs.jsonl`, `run_manifest.json`, and `status.json`; downstream
 evaluation should union the base and extension manifests.
+
+## Tumor-immune spatial experiments on Colab
+
+The repository includes a validated 1,000-tile cohort at
+`configs/counterfactuals/tumor_immune_cohort_1000.csv`. It preserves the seed
+selected by the CellViT++ reranking run. The cohort was selected in source-CSV
+order after requiring at least one neoplastic and one inflammatory centroid.
+For every included tile, the source GeoJSON centroids exactly reproduce the
+stored uint8 neoplastic and inflammatory training controls.
+
+Two experiments use that same cohort:
+
+1. `experiments.spatial.peritumoral_immune_ring` adds nested sets of 80, 160,
+   and 320 inflammatory centroids in a 24 px outer tumor ring. Original and
+   added centroids are jointly rerendered using the training-time sigma-3,
+   peak-normalized encoder. With no generated baseline this is 3,000 PNGs. A
+   baseline plus these three interventions would be four conditions and 4,000
+   PNGs.
+2. `experiments.spatial.tumor_immune_mixing` relocates the exact original
+   inflammatory centroid count through five ordered nearest-tumor-distance
+   bands, from maximal mixing to maximal segregation. Tumor centroids, all
+   other spatial channels, morphology, and the selected generation seed remain
+   fixed within each panel. With no generated baseline this is 5,000 PNGs.
+
+The data root must contain `spatial_maps/`, `geojsons/`, and the standardized
+morphology parquet. The checkpoint argument must point at the directory that
+directly contains `unet/config.json`.
+
+After cloning the branch and installing `.[inference]`, run both experiments:
+
+```bash
+bash workflows/05_generate_counterfactuals/run_tumor_immune_colab.sh \
+  /content/cpathogen_inputs/512_final_dataset \
+  /content/cpathogen_inputs/checkpoint-30000_FID58/checkpoint-30000 \
+  /content/drive/MyDrive/PathOGenResults/tumor_immune_spatial_v2 \
+  8
+```
+
+Batch size 8 is the conservative L4 default. The runner now batches conditions
+across source tiles; repeated per-condition seeds preserve identical initial
+noise within each matched panel even when a panel crosses batch boundaries.
+Increase to 12 only after the first batches fit comfortably, or resume with 4
+after an out-of-memory error.
+
+Both output directories are resumable. Re-running the same command verifies the
+experiment/cohort signature and skips completed PNG and pair records. Batch size
+may change between resumes. A run with a different intervention, checkpoint,
+seed manifest, denoising-step count, or spatial strength is rejected rather than
+mixed into an existing directory.

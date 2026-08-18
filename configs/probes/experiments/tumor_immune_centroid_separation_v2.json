@@ -1,0 +1,24 @@
+{
+  "id": "tumor_immune_centroid_separation_v2",
+  "knob": "tumor-immune centroid separation",
+  "levels": [
+    {"name": "maximal_mixing", "separation_fraction": 0.0},
+    {"name": "low_separation", "separation_fraction": 0.25},
+    {"name": "intermediate", "separation_fraction": 0.5},
+    {"name": "high_separation", "separation_fraction": 0.75},
+    {"name": "maximal_segregation", "separation_fraction": 1.0}
+  ],
+  "changed_controls": ["spatial.inflammatory_centroid_coordinates"],
+  "preserved_controls": [
+    "neoplastic centroid count and coordinates",
+    "inflammatory centroid count",
+    "spatial.connective",
+    "spatial.dead",
+    "spatial.epithelial",
+    "morphology",
+    "generation_seed"
+  ],
+  "distance_definition": "inflammatory centroid to nearest neoplastic centroid in pixels",
+  "dose_definition": "moving 20% quantile window over valid nearest-tumor distances",
+  "version": "v2"
+}

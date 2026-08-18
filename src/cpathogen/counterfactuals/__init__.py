@@ -3,6 +3,8 @@
 from .candidates import CandidateRecord, load_candidate_manifest, select_candidate_shard
 from .centroids import (
     add_jittered_centroids,
+    cell_centroids_by_class_from_geojson,
+    cell_centroids_from_geojson,
     inflammatory_centroids_from_geojson,
     load_centroid_reference_stats,
     load_inflammatory_centroids,
@@ -36,6 +38,8 @@ __all__ = [
     "InterventionContext",
     "MatchedPairRecord",
     "add_jittered_centroids",
+    "cell_centroids_by_class_from_geojson",
+    "cell_centroids_from_geojson",
     "inflammatory_centroids_from_geojson",
     "load_candidate_manifest",
     "load_centroid_reference_stats",

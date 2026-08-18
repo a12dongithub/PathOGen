@@ -78,6 +78,8 @@ def _initial_latents(
 
 
 def _to_pil(decoded: torch.Tensor) -> list[Image.Image]:
+    if not torch.isfinite(decoded).all():
+        raise RuntimeError("VAE decoding produced non-finite pixels")
     images = (decoded / 2 + 0.5).clamp(0, 1)
     images = images.detach().float().cpu().permute(0, 2, 3, 1).numpy()
     arrays = (images * 255.0).round().astype(np.uint8)
@@ -152,6 +154,12 @@ def generate_matched_conditions(
             latents = scheduler.step(
                 predicted_noise, timestep, latents, return_dict=False
             )[0]
+
+    if not torch.isfinite(latents).all():
+        raise RuntimeError(
+            "Denoising produced non-finite latents. GTX 16-series GPUs require "
+            "the FP32 sequential-offload UI path; use FP16 on an L4/A100/H100."
+        )
 
     scaling_factor = float(models.vae.config.scaling_factor)
     # The original validation routine deliberately decoded in float32.

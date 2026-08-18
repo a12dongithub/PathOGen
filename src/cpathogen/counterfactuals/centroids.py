@@ -6,6 +6,7 @@ import hashlib
 import json
 import math
 import random
+from functools import lru_cache
 from pathlib import Path
 
 import numpy as np
@@ -17,17 +18,19 @@ IMAGE_SIZE = 512
 SPATIAL_SIGMA = 3.0
 
 
-def inflammatory_centroids_from_geojson(path: str | Path) -> np.ndarray:
-    """Extract the same rounded inflammatory polygon centers used in training."""
-    path = Path(path)
+@lru_cache(maxsize=4096)
+def _centroid_items_from_geojson(
+    path_string: str,
+) -> tuple[tuple[str, tuple[tuple[int, int], ...]], ...]:
+    path = Path(path_string)
     payload = json.loads(path.read_text(encoding="utf-8"))
     features = payload if isinstance(payload, list) else payload.get("features", [])
-    centroids: list[tuple[int, int]] = []
+    centroids: dict[str, list[tuple[int, int]]] = {}
     for feature in features:
         classification = (
             feature.get("properties", {}).get("classification", {}).get("name")
         )
-        if classification != "Inflammatory":
+        if not classification:
             continue
         geometry = feature.get("geometry", {})
         coordinates = geometry.get("coordinates", [])
@@ -44,8 +47,36 @@ def inflammatory_centroids_from_geojson(path: str | Path) -> np.ndarray:
             x = round(float(np.mean(polygon[:, 0])))
             y = round(float(np.mean(polygon[:, 1])))
             if 0 <= x < IMAGE_SIZE and 0 <= y < IMAGE_SIZE:
-                centroids.append((x, y))
-    return np.asarray(centroids, dtype=np.int16).reshape(-1, 2)
+                centroids.setdefault(str(classification), []).append((x, y))
+    return tuple(
+        (name, tuple(points)) for name, points in sorted(centroids.items())
+    )
+
+
+def cell_centroids_by_class_from_geojson(
+    path: str | Path,
+) -> dict[str, np.ndarray]:
+    """Extract all training-time cell classes with one cached GeoJSON parse."""
+    path_string = str(Path(path).expanduser().resolve())
+    return {
+        name: np.asarray(points, dtype=np.int16).reshape(-1, 2)
+        for name, points in _centroid_items_from_geojson(path_string)
+    }
+
+
+def cell_centroids_from_geojson(
+    path: str | Path, classification_name: str
+) -> np.ndarray:
+    """Extract rounded polygon centers for one training-time cell class."""
+    if not classification_name:
+        raise ValueError("classification_name cannot be empty")
+    by_class = cell_centroids_by_class_from_geojson(path)
+    return by_class.get(classification_name, np.empty((0, 2), dtype=np.int16))
+
+
+def inflammatory_centroids_from_geojson(path: str | Path) -> np.ndarray:
+    """Extract the same rounded inflammatory polygon centers used in training."""
+    return cell_centroids_from_geojson(path, "Inflammatory")
 
 
 def load_inflammatory_centroids(data_root: str | Path, stem: str) -> np.ndarray:

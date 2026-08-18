@@ -14,7 +14,7 @@ class MatchedPairRecord:
     stem: str
     seed: int
     prompt: str
-    baseline_image: str
+    baseline_image: str | None
     counterfactual_image: str
     reference_tile: str | None
     intervention: dict[str, Any]

@@ -11,6 +11,7 @@ import json
 import random
 import subprocess
 import sys
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -113,6 +114,14 @@ def parse_args() -> argparse.Namespace:
             "matched baseline images already exist."
         ),
     )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help=(
+            "Continue an interrupted compatible output directory. Completed PNGs "
+            "and pair records are verified and skipped."
+        ),
+    )
     args = parser.parse_args()
     if args.num_tiles < 1:
         parser.error("--num-tiles must be at least 1")
@@ -132,6 +141,8 @@ def parse_args() -> argparse.Namespace:
         parser.error("--spatial-strength must be non-negative")
     if args.batch_size < 1:
         parser.error("--batch-size must be at least 1")
+    if args.resume and args.dry_run:
+        parser.error("--resume cannot be combined with --dry-run")
     return args
 
 
@@ -177,6 +188,58 @@ def _file_sha256(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _payload_sha256(payload: Any) -> str:
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode(
+        "utf-8"
+    )
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _completed_image_keys(path: Path) -> set[tuple[str, str]]:
+    if not path.is_file():
+        return set()
+    completed: set[tuple[str, str]] = set()
+    with path.open("r", encoding="utf-8", newline="") as handle:
+        for row in csv.DictReader(handle):
+            image_path = Path(row["image_path"])
+            if image_path.is_file():
+                completed.add((row["candidate_id"], row["condition"]))
+    return completed
+
+
+def _completed_pair_keys(path: Path) -> set[tuple[str, str]]:
+    if not path.is_file():
+        return set()
+    completed: set[tuple[str, str]] = set()
+    with path.open("r", encoding="utf-8") as handle:
+        for line_number, line in enumerate(handle, start=1):
+            if not line.strip():
+                continue
+            try:
+                record = json.loads(line)
+                key = (record["candidate_id"], record["intervention"]["slug"])
+            except (KeyError, TypeError, json.JSONDecodeError) as error:
+                raise ValueError(
+                    f"Invalid pair record at {path}:{line_number}"
+                ) from error
+            completed.add(key)
+    return completed
+
+
+@dataclass
+class _GenerationJob:
+    candidate: CandidateRecord
+    condition_name: str
+    condition: ConditionBundle
+    output_path: Path
+    baseline_path: Path | None
+    intervention: Any | None = None
+    applied: Any | None = None
+    difference: dict[str, Any] | None = None
+    reference_tile: Path | None = None
+    pair_already_recorded: bool = False
 
 
 def _git_metadata() -> dict[str, Any]:
@@ -322,9 +385,7 @@ def main() -> None:
     )
     candidates = _select_candidates(args, store)
     output_dir = (args.output_dir or _default_output_dir()).expanduser().resolve()
-    if output_dir.exists() and any(output_dir.iterdir()):
-        raise FileExistsError(f"Output directory is not empty: {output_dir}")
-    output_dir.mkdir(parents=True, exist_ok=True)
+    has_existing_output = output_dir.exists() and any(output_dir.iterdir())
     pairs_path = output_dir / "pairs.jsonl"
     images_manifest_path = output_dir / "images.csv"
 
@@ -381,12 +442,58 @@ def main() -> None:
             "num_inference_steps": args.steps,
             "spatial_strength": args.spatial_strength,
             "batch_size": args.batch_size,
+            "batch_size_history": [args.batch_size],
             "requested_device": args.device,
             "requested_dtype": args.dtype,
             "matched_initial_noise": True,
             "baseline_generated": not args.omit_baseline,
         },
     }
+    signature_payload = {
+        "experiment_source_sha256": manifest["experiment"]["source_sha256"],
+        "interventions": manifest["experiment"]["interventions"],
+        "candidate_manifest_sha256": manifest["data"]["candidate_manifest_sha256"],
+        "candidates": manifest["data"]["candidates"],
+        "data_root": manifest["data"]["root"],
+        "checkpoint": manifest["generation"]["checkpoint"],
+        "base_model": args.base_model,
+        "revision": args.revision,
+        "prompt": args.prompt,
+        "intervention_seed": args.intervention_seed,
+        "num_inference_steps": args.steps,
+        "spatial_strength": args.spatial_strength,
+        "baseline_generated": not args.omit_baseline,
+    }
+    manifest["run_signature"] = _payload_sha256(signature_payload)
+    existing_status: str | None = None
+    if has_existing_output:
+        if not args.resume:
+            raise FileExistsError(
+                f"Output directory is not empty: {output_dir}; use --resume only "
+                "for the same interrupted run"
+            )
+        manifest_path = output_dir / "run_manifest.json"
+        if not manifest_path.is_file():
+            raise FileNotFoundError(
+                f"Cannot resume without an existing run manifest: {manifest_path}"
+            )
+        existing_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if existing_manifest.get("run_signature") != manifest["run_signature"]:
+            raise ValueError(
+                "Refusing to resume: experiment, cohort, controls, or generation "
+                "settings differ from the existing run"
+            )
+        manifest = existing_manifest
+        existing_status = manifest.get("status")
+        manifest.setdefault("resumed_at", []).append(
+            datetime.now(timezone.utc).isoformat()
+        )
+        history = manifest["generation"].setdefault("batch_size_history", [])
+        if not history or history[-1] != args.batch_size:
+            history.append(args.batch_size)
+        manifest["generation"]["batch_size"] = args.batch_size
+    else:
+        output_dir.mkdir(parents=True, exist_ok=True)
     _json_write(output_dir / "run_manifest.json", manifest)
 
     if args.dry_run:
@@ -418,6 +525,23 @@ def main() -> None:
         print(f"Dry run validated {len(interventions)} intervention(s): {output_dir}")
         return
 
+    if args.resume and existing_status == "completed":
+        expected_images = len(candidates) * (
+            len(interventions) + int(not args.omit_baseline)
+        )
+        expected_pairs = len(candidates) * len(interventions)
+        completed_images = _completed_image_keys(images_manifest_path)
+        completed_pairs = _completed_pair_keys(pairs_path)
+        if (
+            len(completed_images) == expected_images
+            and len(completed_pairs) == expected_pairs
+        ):
+            print(f"Run is already complete; nothing to resume: {output_dir}")
+            return
+
+    manifest["status"] = "running"
+    _json_write(output_dir / "run_manifest.json", manifest)
+
     from cpathogen.generation.checkpoints import load_phase2_generation_models
     from cpathogen.generation.counterfactuals import generate_matched_conditions
 
@@ -434,8 +558,110 @@ def main() -> None:
     manifest["generation"]["resolved_base_model"] = models.base_model
     _json_write(output_dir / "run_manifest.json", manifest)
 
-    pair_count = 0
-    image_count = 0
+    completed_images = _completed_image_keys(images_manifest_path)
+    completed_pairs = _completed_pair_keys(pairs_path)
+    image_count = len(completed_images)
+    pair_count = len(completed_pairs)
+    expected_image_count = len(candidates) * (
+        len(interventions) + int(not args.omit_baseline)
+    )
+    expected_pair_count = len(candidates) * len(interventions)
+    pending_jobs: list[_GenerationJob] = []
+    generated_batches = 0
+
+    manifest["generation"]["batching_strategy"] = (
+        "cross-candidate condition batches with per-condition seed replay"
+    )
+    manifest["generation"]["matched_initial_noise"] = True
+    _json_write(output_dir / "run_manifest.json", manifest)
+
+    def append_pair_record(job: _GenerationJob) -> None:
+        nonlocal pair_count
+        if job.intervention is None or job.applied is None:
+            raise RuntimeError("Pair records require intervention metadata")
+        record = MatchedPairRecord(
+            candidate_id=job.candidate.candidate_id,
+            stem=job.candidate.stem,
+            seed=job.candidate.seed,
+            prompt=args.prompt,
+            baseline_image=(
+                str(job.baseline_path) if job.baseline_path is not None else None
+            ),
+            counterfactual_image=str(job.output_path),
+            reference_tile=(
+                str(job.reference_tile) if job.reference_tile is not None else None
+            ),
+            intervention=job.intervention.manifest(),
+            applied_details=job.applied.details,
+            difference=job.difference or {},
+        )
+        _append_jsonl(pairs_path, record.to_dict())
+        completed_pairs.add(
+            (job.candidate.candidate_id, job.intervention.slug)
+        )
+        pair_count = len(completed_pairs)
+
+    def flush_jobs() -> None:
+        nonlocal image_count, generated_batches
+        if not pending_jobs:
+            return
+        jobs = list(pending_jobs)
+        pending_jobs.clear()
+        images = generate_matched_conditions(
+            models,
+            [job.condition for job in jobs],
+            seed=0,
+            prompt=args.prompt,
+            num_inference_steps=args.steps,
+            spatial_strength=args.spatial_strength,
+            matched_noise=False,
+            per_condition_seeds=[job.candidate.seed for job in jobs],
+        )
+        for job, image in zip(jobs, images, strict=True):
+            _save_png(image, job.output_path)
+            parameters = (
+                "{}"
+                if job.intervention is None
+                else json.dumps(job.intervention.parameters(), sort_keys=True)
+            )
+            _append_image_manifest(
+                images_manifest_path,
+                {
+                    "candidate_id": job.candidate.candidate_id,
+                    "stem": job.candidate.stem,
+                    "seed": job.candidate.seed,
+                    "condition": job.condition_name,
+                    "intervention_parameters": parameters,
+                    "image_path": str(job.output_path),
+                },
+            )
+            completed_images.add(
+                (job.candidate.candidate_id, job.condition_name)
+            )
+            if job.intervention is not None and not job.pair_already_recorded:
+                append_pair_record(job)
+        image_count = len(completed_images)
+        generated_batches += 1
+        manifest["progress"] = {
+            "image_count": image_count,
+            "expected_image_count": expected_image_count,
+            "pair_count": pair_count,
+            "expected_pair_count": expected_pair_count,
+            "generated_batches_this_process": generated_batches,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        _json_write(output_dir / "run_manifest.json", manifest)
+        print(
+            f"[generation] {image_count}/{expected_image_count} images; "
+            f"{pair_count}/{expected_pair_count} pairs",
+            flush=True,
+        )
+
+    def queue_job(job: _GenerationJob) -> None:
+        pending_jobs.append(job)
+        if len(pending_jobs) >= args.batch_size:
+            flush_jobs()
+
     for candidate in candidates:
         stem = candidate.stem
         seed = candidate.seed
@@ -449,104 +675,53 @@ def main() -> None:
         )
         seed_dir = output_dir / "images" / candidate.candidate_id / f"seed_{seed:010d}"
         seed_dir.mkdir(parents=True, exist_ok=True)
-        baseline_path = seed_dir / "baseline.png"
-        pending = list(applied_items)
-        generated_groups = []
-        if args.omit_baseline:
-            first_items = pending[: args.batch_size]
-            pending = pending[args.batch_size :]
-            first_images = generate_matched_conditions(
-                models,
-                [item[1].condition for item in first_items],
-                seed=seed,
-                prompt=args.prompt,
-                num_inference_steps=args.steps,
-                spatial_strength=args.spatial_strength,
-                matched_noise=True,
-            )
-            generated_groups.append((first_items, first_images))
-        else:
-            first_capacity = max(0, args.batch_size - 1)
-            first_items = pending[:first_capacity]
-            pending = pending[first_capacity:]
-            first_conditions = [original] + [item[1].condition for item in first_items]
-            first_images = generate_matched_conditions(
-                models,
-                first_conditions,
-                seed=seed,
-                prompt=args.prompt,
-                num_inference_steps=args.steps,
-                spatial_strength=args.spatial_strength,
-                matched_noise=True,
-            )
-            _save_png(first_images[0], baseline_path)
-            _append_image_manifest(
-                images_manifest_path,
-                {
-                    "candidate_id": candidate.candidate_id,
-                    "stem": stem,
-                    "seed": seed,
-                    "condition": "baseline",
-                    "intervention_parameters": "{}",
-                    "image_path": str(baseline_path),
-                },
-            )
-            image_count += 1
-            generated_groups.append((first_items, first_images[1:]))
-        while pending:
-            group = pending[: args.batch_size]
-            pending = pending[args.batch_size :]
-            images = generate_matched_conditions(
-                models,
-                [item[1].condition for item in group],
-                seed=seed,
-                prompt=args.prompt,
-                num_inference_steps=args.steps,
-                spatial_strength=args.spatial_strength,
-                matched_noise=True,
-            )
-            generated_groups.append((group, images))
+        baseline_file = seed_dir / "baseline.png"
+        baseline_path = None if args.omit_baseline else baseline_file
+        reference_tile = store.image_path(stem)
 
-        for group, images in generated_groups:
-            for (intervention, applied, difference), image in zip(
-                group, images, strict=True
-            ):
-                counterfactual_path = seed_dir / f"{intervention.slug}.png"
-                _save_png(image, counterfactual_path)
-                _append_image_manifest(
-                    images_manifest_path,
-                    {
-                        "candidate_id": candidate.candidate_id,
-                        "stem": stem,
-                        "seed": seed,
-                        "condition": intervention.slug,
-                        "intervention_parameters": json.dumps(
-                            intervention.parameters(), sort_keys=True
-                        ),
-                        "image_path": str(counterfactual_path),
-                    },
+        baseline_key = (candidate.candidate_id, "baseline")
+        if not args.omit_baseline and baseline_key not in completed_images:
+            queue_job(
+                _GenerationJob(
+                    candidate=candidate,
+                    condition_name="baseline",
+                    condition=original,
+                    output_path=baseline_file,
+                    baseline_path=baseline_file,
+                    reference_tile=reference_tile,
                 )
-                image_count += 1
-                reference_tile = store.image_path(stem)
-                record = MatchedPairRecord(
-                    candidate_id=candidate.candidate_id,
-                    stem=stem,
-                    seed=seed,
-                    prompt=args.prompt,
-                    baseline_image=str(baseline_path),
-                    counterfactual_image=str(counterfactual_path),
-                    reference_tile=str(reference_tile) if reference_tile else None,
-                    intervention=intervention.manifest(),
-                    applied_details=applied.details,
-                    difference=difference,
-                )
-                _append_jsonl(pairs_path, record.to_dict())
-                pair_count += 1
-        if models.device.type == "mps":
-            torch.mps.empty_cache()
-        elif models.device.type == "cuda":
-            torch.cuda.empty_cache()
+            )
 
+        for intervention, applied, difference in applied_items:
+            key = (candidate.candidate_id, intervention.slug)
+            counterfactual_path = seed_dir / f"{intervention.slug}.png"
+            pair_exists = key in completed_pairs
+            job = _GenerationJob(
+                candidate=candidate,
+                condition_name=intervention.slug,
+                condition=applied.condition,
+                output_path=counterfactual_path,
+                baseline_path=baseline_path,
+                intervention=intervention,
+                applied=applied,
+                difference=difference,
+                reference_tile=reference_tile,
+                pair_already_recorded=pair_exists,
+            )
+            if key in completed_images:
+                if not pair_exists:
+                    append_pair_record(job)
+                continue
+            queue_job(job)
+
+    flush_jobs()
+
+    if image_count != expected_image_count or pair_count != expected_pair_count:
+        raise RuntimeError(
+            "Generation ended with incomplete manifests: "
+            f"images={image_count}/{expected_image_count}, "
+            f"pairs={pair_count}/{expected_pair_count}"
+        )
     manifest["status"] = "completed"
     manifest["completed_at"] = datetime.now(timezone.utc).isoformat()
     manifest["pair_count"] = pair_count

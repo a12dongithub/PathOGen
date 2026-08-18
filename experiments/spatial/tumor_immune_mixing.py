@@ -1,137 +1,246 @@
-"""Redistribute inflammatory signal toward tumor-rich regions at fixed mass."""
+"""Relocate a fixed inflammatory-cell count along a mixing-to-separation axis."""
 
 from __future__ import annotations
 
+import random
+from functools import lru_cache
+from pathlib import Path
 from typing import Any
 
-import torch
-import torch.nn.functional as functional
+import numpy as np
+from scipy.ndimage import distance_transform_edt
 from torch import Tensor
 
-from cpathogen.counterfactuals import ConditionIntervention, InterventionContext
+from cpathogen.counterfactuals import (
+    ConditionIntervention,
+    InterventionContext,
+    cell_centroids_by_class_from_geojson,
+    render_centroid_channel,
+)
+from cpathogen.counterfactuals.centroids import IMAGE_SIZE, centroid_sha256
 
 TUMOR_CHANNEL = 0
 INFLAMMATORY_CHANNEL = 1
-TARGET_BLUR_SIGMA_PX = 12.0
-TARGET_BLUR_RADIUS_PX = 36
+RNG_NAMESPACE = "tumor-immune-centroid-separation-v2"
+GRID_SPACING_PX = 6
+GRID_JITTER_PX = 1
+MINIMUM_TUMOR_DISTANCE_PX = 4.0
+DISTANCE_QUANTILE_WINDOW = 0.20
+
+# Zero is maximally mixed under the no-overlapping-centroid constraint; one is
+# maximally separated within the available tile area.
+SEPARATION_LEVELS = (
+    ("maximal_mixing", 0.00),
+    ("low_separation", 0.25),
+    ("intermediate", 0.50),
+    ("high_separation", 0.75),
+    ("maximal_segregation", 1.00),
+)
 
 
-def _scale_to_capped_mass(weights: Tensor, target_mass: float) -> Tensor:
-    """Scale nonnegative weights into [0, 1] with the requested total mass."""
-    values = weights.to(dtype=torch.float64).clamp_min(0.0)
-    if not 0.0 < target_mass <= values.numel():
-        raise ValueError("Target mass must be in (0, number of pixels]")
-    if float(values.sum()) <= 0.0:
-        raise ValueError("Mixing weights must have positive mass")
-    low, high = 0.0, 1.0
-    while float(torch.clamp(values * high, max=1.0).sum()) < target_mass:
-        high *= 2.0
-    for _ in range(64):
-        midpoint = (low + high) / 2.0
-        if float(torch.clamp(values * midpoint, max=1.0).sum()) < target_mass:
-            low = midpoint
-        else:
-            high = midpoint
-    return torch.clamp(values * ((low + high) / 2.0), max=1.0)
+def _geojson_path(context: InterventionContext) -> Path:
+    path = context.store.data_root / "geojsons" / f"{context.original_stem}.geojson"
+    if not path.is_file():
+        raise FileNotFoundError(
+            "Exact tumor-immune mixing requires source nuclei at "
+            f"data_root/geojsons/<stem>.geojson; missing: {path}"
+        )
+    return path
 
 
-def _maximally_tumor_centered(tumor: Tensor, target_mass: float) -> Tensor:
-    """Fallback target that maximizes tumor-weighted inflammatory overlap."""
-    flat = torch.zeros(tumor.numel(), dtype=torch.float64, device=tumor.device)
-    order = torch.argsort(tumor.flatten(), descending=True)
-    whole = min(int(target_mass), len(order))
-    flat[order[:whole]] = 1.0
-    remainder = target_mass - whole
-    if remainder > 0.0 and whole < len(order):
-        flat[order[whole]] = remainder
-    return flat.reshape(tumor.shape)
+def _rng_seed(context: InterventionContext) -> int:
+    return context.rng(RNG_NAMESPACE).getrandbits(64)
 
 
-def tumor_weighted_overlap(tumor: Tensor, inflammatory: Tensor) -> float:
-    mass = float(inflammatory.sum())
-    if mass <= 0.0:
-        raise ValueError("Inflammatory channel has no mass")
-    return float((tumor * inflammatory).sum()) / mass
+def _candidate_lattice(rng: random.Random) -> np.ndarray:
+    """Build a deterministic, near-Poisson candidate lattice for one tile."""
+    offset_x = rng.randrange(GRID_SPACING_PX)
+    offset_y = rng.randrange(GRID_SPACING_PX)
+    points: list[tuple[int, int]] = []
+    for y0 in range(offset_y, IMAGE_SIZE, GRID_SPACING_PX):
+        for x0 in range(offset_x, IMAGE_SIZE, GRID_SPACING_PX):
+            x = x0 + rng.randint(-GRID_JITTER_PX, GRID_JITTER_PX)
+            y = y0 + rng.randint(-GRID_JITTER_PX, GRID_JITTER_PX)
+            if 0 <= x < IMAGE_SIZE and 0 <= y < IMAGE_SIZE:
+                points.append((x, y))
+    return np.asarray(points, dtype=np.int16).reshape(-1, 2)
 
 
-def tumor_attracted_target(tumor: Tensor, inflammatory: Tensor) -> Tensor:
-    """Construct a smooth inflammatory target centered on tumor regions."""
-    tumor64 = tumor.to(dtype=torch.float64)
-    immune64 = inflammatory.to(dtype=torch.float64)
-    mass = float(immune64.sum())
-    coordinates = torch.arange(
-        -TARGET_BLUR_RADIUS_PX,
-        TARGET_BLUR_RADIUS_PX + 1,
-        dtype=torch.float64,
-        device=tumor.device,
+def _nearest_tumor_distance_map(tumor_centroids: np.ndarray) -> np.ndarray:
+    tumor_centroids = np.asarray(tumor_centroids, dtype=np.int16).reshape(-1, 2)
+    if len(tumor_centroids) == 0:
+        raise ValueError("At least one neoplastic centroid is required")
+    non_tumor = np.ones((IMAGE_SIZE, IMAGE_SIZE), dtype=bool)
+    non_tumor[tumor_centroids[:, 1], tumor_centroids[:, 0]] = False
+    return distance_transform_edt(non_tumor)
+
+
+def _select_distance_quantile_band(
+    candidates: np.ndarray,
+    distances: np.ndarray,
+    *,
+    count: int,
+    separation_fraction: float,
+    rng: random.Random,
+) -> np.ndarray:
+    """Select an exact count from a monotone moving distance-quantile window."""
+    if count < 1:
+        raise ValueError("At least one inflammatory centroid is required")
+    if not 0.0 <= separation_fraction <= 1.0:
+        raise ValueError("separation_fraction must be in [0, 1]")
+    if len(candidates) < count:
+        raise RuntimeError(
+            f"Only {len(candidates)} valid positions are available for {count} cells"
+        )
+
+    # Random values resolve equal-distance ties. Distance rank remains the dose,
+    # and every level receives the same randomized lattice and tie ordering.
+    tie_breakers = np.asarray([rng.random() for _ in range(len(candidates))])
+    order = np.lexsort((tie_breakers, distances))
+    ordered = candidates[order]
+    available = len(ordered)
+    window_count = max(count, round(DISTANCE_QUANTILE_WINDOW * available))
+    maximum_start = available - window_count
+    start = round(separation_fraction * maximum_start)
+    window = ordered[start : start + window_count]
+
+    # Spread selections over the complete band instead of taking a dense block.
+    indices = np.floor(
+        (np.arange(count, dtype=np.float64) + 0.5) * len(window) / count
+    ).astype(int)
+    return np.ascontiguousarray(window[indices], dtype=np.int16)
+
+
+@lru_cache(maxsize=8192)
+def _relocated_centroids_cached(
+    geojson_path: str,
+    separation_fraction: float,
+    rng_seed: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    path = Path(geojson_path)
+    by_class = cell_centroids_by_class_from_geojson(path)
+    tumor = by_class.get("Neoplastic", np.empty((0, 2), dtype=np.int16))
+    original_inflammatory = by_class.get(
+        "Inflammatory", np.empty((0, 2), dtype=np.int16)
     )
-    kernel_1d = torch.exp(-0.5 * (coordinates / TARGET_BLUR_SIGMA_PX) ** 2)
-    kernel_1d /= kernel_1d.sum()
-    kernel = torch.outer(kernel_1d, kernel_1d)[None, None]
-    blurred_tumor = functional.conv2d(
-        tumor64[None, None], kernel, padding=TARGET_BLUR_RADIUS_PX
-    )[0, 0]
-    epsilon = max(float(blurred_tumor.mean()) * 1e-6, 1e-12)
-    weights = blurred_tumor + epsilon
-    target = _scale_to_capped_mass(weights, mass)
-    if tumor_weighted_overlap(tumor64, target) <= tumor_weighted_overlap(
-        tumor64, immune64
-    ):
-        target = _maximally_tumor_centered(tumor64, mass)
-    return target.to(dtype=inflammatory.dtype)
+    if len(tumor) == 0 or len(original_inflammatory) == 0:
+        raise ValueError(
+            f"Both Neoplastic and Inflammatory centroids are required: {path.name}"
+        )
+
+    rng = random.Random(rng_seed)
+    candidates = _candidate_lattice(rng)
+    distance_map = _nearest_tumor_distance_map(tumor)
+    candidate_distances = distance_map[candidates[:, 1], candidates[:, 0]]
+    valid = candidate_distances >= MINIMUM_TUMOR_DISTANCE_PX
+    candidates = candidates[valid]
+    candidate_distances = candidate_distances[valid]
+    relocated = _select_distance_quantile_band(
+        candidates,
+        candidate_distances,
+        count=len(original_inflammatory),
+        separation_fraction=separation_fraction,
+        rng=rng,
+    )
+    relocated_distances = distance_map[relocated[:, 1], relocated[:, 0]]
+    original_distances = distance_map[
+        original_inflammatory[:, 1], original_inflammatory[:, 0]
+    ]
+    distance_summary = np.asarray(
+        [
+            original_distances.mean(),
+            np.median(original_distances),
+            relocated_distances.mean(),
+            np.median(relocated_distances),
+        ],
+        dtype=np.float64,
+    )
+    return tumor, original_inflammatory, relocated, distance_summary
 
 
-class TumorImmuneMixing(ConditionIntervention):
-    """Interpolate inflammatory signal toward a tumor-attracted target."""
+def _relocated_centroids(
+    context: InterventionContext, separation_fraction: float
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    return _relocated_centroids_cached(
+        str(_geojson_path(context).resolve()),
+        float(separation_fraction),
+        _rng_seed(context),
+    )
 
-    def __init__(self, mixing_fraction: float) -> None:
-        self.mixing_fraction = float(mixing_fraction)
-        if not 0.0 < self.mixing_fraction < 1.0:
-            raise ValueError("mixing_fraction must be between zero and one")
-        label = str(self.mixing_fraction).replace(".", "p")
-        self.name = f"tumor_immune_mixing_{label}"
+
+class TumorImmuneCentroidSeparation(ConditionIntervention):
+    """Move all immune centroids while retaining exact tumor and immune counts."""
+
+    def __init__(self, label: str, separation_fraction: float) -> None:
+        self.label = str(label)
+        self.separation_fraction = float(separation_fraction)
+        if not 0.0 <= self.separation_fraction <= 1.0:
+            raise ValueError("separation_fraction must be in [0, 1]")
+        self.name = f"tumor_immune_{self.label}"
 
     def parameters(self) -> dict[str, Any]:
         return {
-            "mixing_fraction": self.mixing_fraction,
-            "preserved_quantity": "inflammatory channel mass",
-            "target": "Gaussian-smoothed tumor-centered inflammatory distribution",
-            "target_blur_sigma_px": TARGET_BLUR_SIGMA_PX,
+            "pattern": self.label,
+            "separation_fraction": self.separation_fraction,
+            "distance_definition": (
+                "inflammatory-centroid to nearest neoplastic-centroid"
+            ),
+            "selection": "moving 20% nearest-distance quantile band",
+            "minimum_tumor_centroid_distance_px": MINIMUM_TUMOR_DISTANCE_PX,
+            "candidate_grid_spacing_px": GRID_SPACING_PX,
+            "candidate_grid_jitter_px": GRID_JITTER_PX,
+            "preserved_quantities": [
+                "neoplastic centroid count and coordinates",
+                "inflammatory centroid count",
+                "other cell-type spatial channels",
+                "morphology",
+                "generation seed",
+            ],
         }
 
-    def modify_spatial(
-        self, spatial: Tensor, context: InterventionContext
-    ) -> Tensor:
-        del context
-        tumor = spatial[TUMOR_CHANNEL]
-        inflammatory = spatial[INFLAMMATORY_CHANNEL]
-        target = tumor_attracted_target(tumor, inflammatory)
-        spatial[INFLAMMATORY_CHANNEL] = (
-            (1.0 - self.mixing_fraction) * inflammatory
-            + self.mixing_fraction * target
+    def modify_spatial(self, spatial: Tensor, context: InterventionContext) -> Tensor:
+        _, _, relocated, _ = _relocated_centroids(
+            context, self.separation_fraction
+        )
+        spatial[INFLAMMATORY_CHANNEL] = render_centroid_channel(relocated).to(
+            device=spatial.device
         )
         return spatial
 
     def details(self, context: InterventionContext) -> dict[str, Any]:
-        original = context.store.load_spatial(context.original_stem)
-        tumor = original[TUMOR_CHANNEL]
-        inflammatory = original[INFLAMMATORY_CHANNEL]
-        target = tumor_attracted_target(tumor, inflammatory)
-        converted = (
-            (1.0 - self.mixing_fraction) * inflammatory
-            + self.mixing_fraction * target
+        tumor, original, relocated, distances = _relocated_centroids(
+            context, self.separation_fraction
         )
         return {
-            "mixing_fraction": self.mixing_fraction,
-            "inflammatory_mass_before": float(inflammatory.sum()),
-            "inflammatory_mass_after": float(converted.sum()),
-            "tumor_weighted_overlap_before": tumor_weighted_overlap(
-                tumor, inflammatory
-            ),
-            "tumor_weighted_overlap_after": tumor_weighted_overlap(tumor, converted),
+            "pattern": self.label,
+            "separation_fraction": self.separation_fraction,
+            "neoplastic_centroid_count_before": len(tumor),
+            "neoplastic_centroid_count_after": len(tumor),
+            "inflammatory_centroid_count_before": len(original),
+            "inflammatory_centroid_count_after": len(relocated),
+            "mean_nearest_tumor_distance_before_px": float(distances[0]),
+            "median_nearest_tumor_distance_before_px": float(distances[1]),
+            "mean_nearest_tumor_distance_after_px": float(distances[2]),
+            "median_nearest_tumor_distance_after_px": float(distances[3]),
+            "original_inflammatory_centroids_sha256": centroid_sha256(original),
+            "relocated_inflammatory_centroids_sha256": centroid_sha256(relocated),
+            "tumor_centroids_sha256": centroid_sha256(tumor),
             "changed_spatial_channel": "inflammatory",
+            "preserved_spatial_channels": [
+                "neoplastic",
+                "connective",
+                "dead",
+                "epithelial",
+            ],
+            "note": (
+                "Exact centroid count is preserved; rendered channel mass is not a "
+                "count because training-time peak normalization is retained."
+            ),
         }
 
 
 def build_interventions() -> list[ConditionIntervention]:
-    return [TumorImmuneMixing(0.25), TumorImmuneMixing(0.50), TumorImmuneMixing(0.75)]
+    return [
+        TumorImmuneCentroidSeparation(label, fraction)
+        for label, fraction in SEPARATION_LEVELS
+    ]

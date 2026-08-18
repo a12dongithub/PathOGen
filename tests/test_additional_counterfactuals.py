@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import numpy as np
@@ -5,6 +6,7 @@ import pandas as pd
 import torch
 
 from cpathogen.counterfactuals import ConditionStore, InterventionContext
+from cpathogen.counterfactuals.centroids import render_centroid_channel
 from cpathogen.counterfactuals.conditions import MORPHOLOGY_FEATURE_NAMES
 from experiments.spatial.nuclear_shape_irregularity import (
     build_interventions as shape_interventions,
@@ -14,9 +16,6 @@ from experiments.spatial.stain_brightness import (
 )
 from experiments.spatial.tumor_immune_mixing import (
     build_interventions as mixing_interventions,
-)
-from experiments.spatial.tumor_immune_mixing import (
-    tumor_weighted_overlap,
 )
 
 
@@ -88,29 +87,71 @@ def test_stain_brightness_changes_only_rgb_means(tmp_path: Path) -> None:
         assert torch.equal(applied.condition.spatial, original.spatial)
 
 
-def test_tumor_immune_mixing_preserves_mass_and_increases_overlap(
+def _centroid_feature(x: int, y: int, classification: str) -> dict:
+    return {
+        "type": "Feature",
+        "geometry": {
+            "type": "Polygon",
+            "coordinates": [
+                [[x - 1, y - 1], [x + 1, y - 1], [x + 1, y + 1], [x - 1, y + 1]]
+            ],
+        },
+        "properties": {"classification": {"name": classification}},
+    }
+
+
+def make_centroid_store(tmp_path: Path) -> ConditionStore:
+    maps = tmp_path / "spatial_maps"
+    geojsons = tmp_path / "geojsons"
+    maps.mkdir()
+    geojsons.mkdir()
+    tumor = np.asarray(
+        [(x, y) for y in range(180, 333, 38) for x in range(180, 333, 38)],
+        dtype=np.int16,
+    )
+    inflammatory = np.asarray(
+        [(40 + 30 * index, 60 + 17 * (index % 5)) for index in range(12)],
+        dtype=np.int16,
+    )
+    spatial = np.zeros((512, 512, 5), dtype=np.float32)
+    spatial[:, :, 0] = render_centroid_channel(tumor).numpy()
+    spatial[:, :, 1] = render_centroid_channel(inflammatory).numpy()
+    np.savez_compressed(maps / "tile.npz", map=spatial)
+    features = [
+        *[_centroid_feature(int(x), int(y), "Neoplastic") for x, y in tumor],
+        *[
+            _centroid_feature(int(x), int(y), "Inflammatory")
+            for x, y in inflammatory
+        ],
+    ]
+    (geojsons / "tile.geojson").write_text(json.dumps(features), encoding="utf-8")
+    pd.DataFrame(
+        [np.zeros(16, dtype=np.float32)],
+        index=["tile"],
+        columns=MORPHOLOGY_FEATURE_NAMES,
+    ).to_parquet(tmp_path / "morphology_stats.parquet")
+    return ConditionStore(tmp_path)
+
+
+def test_tumor_immune_mixing_preserves_exact_counts_and_orders_distance(
     tmp_path: Path,
 ) -> None:
-    store = make_store(tmp_path)
+    store = make_centroid_store(tmp_path)
     original = store.load("tile")
-    original_mass = original.spatial[1].sum()
-    overlaps = [tumor_weighted_overlap(original.spatial[0], original.spatial[1])]
-    converted_channels = []
+    distances = []
+    hashes = []
     for intervention in mixing_interventions():
         applied = intervention.apply(original, context(store))
         converted = applied.condition.spatial
-        torch.testing.assert_close(
-            converted[1].sum(), original_mass, rtol=1e-5, atol=1e-4
-        )
         assert torch.equal(converted[0], original.spatial[0])
         assert torch.equal(converted[2:], original.spatial[2:])
         assert torch.equal(applied.condition.morphology, original.morphology)
         assert float(converted.min()) >= 0.0 and float(converted.max()) <= 1.0
-        overlaps.append(tumor_weighted_overlap(converted[0], converted[1]))
-        converted_channels.append(converted[1])
-    assert overlaps == sorted(overlaps)
-    first_delta = converted_channels[0] - original.spatial[1]
-    second_delta = converted_channels[1] - original.spatial[1]
-    third_delta = converted_channels[2] - original.spatial[1]
-    torch.testing.assert_close(second_delta, 2.0 * first_delta)
-    torch.testing.assert_close(third_delta, 3.0 * first_delta)
+        assert applied.details["neoplastic_centroid_count_before"] == 25
+        assert applied.details["neoplastic_centroid_count_after"] == 25
+        assert applied.details["inflammatory_centroid_count_before"] == 12
+        assert applied.details["inflammatory_centroid_count_after"] == 12
+        distances.append(applied.details["median_nearest_tumor_distance_after_px"])
+        hashes.append(applied.details["relocated_inflammatory_centroids_sha256"])
+    assert distances == sorted(distances)
+    assert len(set(hashes)) == len(hashes)

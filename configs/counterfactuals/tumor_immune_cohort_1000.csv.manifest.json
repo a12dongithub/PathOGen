@@ -1,0 +1,17 @@
+{
+  "cohort_csv": "tumor_immune_cohort_1000.csv",
+  "cohort_csv_sha256": "26bc3c170a92fa3103ae6a005ac38429966450ecd04a5600ff9a3b4b8792d0e2",
+  "created_at": "2026-08-18T12:00:30.031277+00:00",
+  "data_root_layout": "512_final_dataset",
+  "exclusions_before_completion": {
+    "zero_inflammatory_centroids": 282
+  },
+  "morphology_table": "morphology_stats.parquet",
+  "requested_candidate_count": 1000,
+  "rows_scanned_through": 1282,
+  "schema_version": 1,
+  "selected_candidate_count": 1000,
+  "selected_candidates_sha256": "e4f3fb766f0d81b91e80f6f9f207e8d501992a23e42cc211e6cad565a9fee9d0",
+  "selected_candidates_source_name": "selected_candidates.csv",
+  "selection_rule": "CSV order; unique stem; aligned morphology and spatial map; source GeoJSON contains >=1 Neoplastic and >=1 Inflammatory centroid; both rendered centroid channels exactly reproduce stored uint8 controls"
+}
