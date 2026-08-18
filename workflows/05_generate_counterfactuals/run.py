@@ -102,6 +102,14 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--output-dir", type=Path)
     parser.add_argument(
+        "--tile-folder-layout",
+        action="store_true",
+        help=(
+            "Write PNGs directly as <output-dir>/<tile-stem>/<condition>.png. "
+            "The default remains images/<candidate-id>/seed_<seed>/<condition>.png."
+        ),
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Validate and apply interventions without loading the diffusion model.",
@@ -180,6 +188,29 @@ def _save_png(image: Any, path: Path) -> None:
     temporary = path.with_suffix(path.suffix + ".tmp")
     image.save(temporary, format="PNG")
     temporary.replace(path)
+
+
+def _tile_directory_name(stem: str) -> str:
+    """Validate that a dataset stem is safe to use as one directory name."""
+    if not stem or stem in {".", ".."} or Path(stem).name != stem:
+        raise ValueError(f"Unsafe tile stem for output directory: {stem!r}")
+    return stem
+
+
+def _candidate_image_dir(
+    output_dir: Path,
+    candidate: CandidateRecord,
+    *,
+    tile_folder_layout: bool,
+) -> Path:
+    if tile_folder_layout:
+        return output_dir / _tile_directory_name(candidate.stem)
+    return (
+        output_dir
+        / "images"
+        / candidate.candidate_id
+        / f"seed_{candidate.seed:010d}"
+    )
 
 
 def _file_sha256(path: Path) -> str:
@@ -384,6 +415,12 @@ def main() -> None:
         images_dir=images_dir,
     )
     candidates = _select_candidates(args, store)
+    if args.tile_folder_layout:
+        stems = [candidate.stem for candidate in candidates]
+        if len(stems) != len(set(stems)):
+            raise ValueError(
+                "--tile-folder-layout requires one selected seed per unique tile stem"
+            )
     output_dir = (args.output_dir or _default_output_dir()).expanduser().resolve()
     has_existing_output = output_dir.exists() and any(output_dir.iterdir())
     pairs_path = output_dir / "pairs.jsonl"
@@ -447,6 +484,9 @@ def main() -> None:
             "requested_dtype": args.dtype,
             "matched_initial_noise": True,
             "baseline_generated": not args.omit_baseline,
+            "image_layout": (
+                "experiment/tile/condition" if args.tile_folder_layout else "legacy"
+            ),
         },
     }
     signature_payload = {
@@ -463,6 +503,7 @@ def main() -> None:
         "num_inference_steps": args.steps,
         "spatial_strength": args.spatial_strength,
         "baseline_generated": not args.omit_baseline,
+        "image_layout": manifest["generation"]["image_layout"],
     }
     manifest["run_signature"] = _payload_sha256(signature_payload)
     existing_status: str | None = None
@@ -664,7 +705,6 @@ def main() -> None:
 
     for candidate in candidates:
         stem = candidate.stem
-        seed = candidate.seed
         original = store.load(stem)
         applied_items = _apply_interventions(
             original=original,
@@ -673,7 +713,11 @@ def main() -> None:
             store=store,
             intervention_seed=args.intervention_seed,
         )
-        seed_dir = output_dir / "images" / candidate.candidate_id / f"seed_{seed:010d}"
+        seed_dir = _candidate_image_dir(
+            output_dir,
+            candidate,
+            tile_folder_layout=args.tile_folder_layout,
+        )
         seed_dir.mkdir(parents=True, exist_ok=True)
         baseline_file = seed_dir / "baseline.png"
         baseline_path = None if args.omit_baseline else baseline_file

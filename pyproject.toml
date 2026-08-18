@@ -36,6 +36,9 @@ probe = [
     "torchvision>=0.17,<1",
     "tqdm>=4.65",
 ]
+cloud = [
+    "google-cloud-storage>=2,<4",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]

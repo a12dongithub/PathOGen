@@ -244,3 +244,48 @@ experiment/cohort signature and skips completed PNG and pair records. Batch size
 may change between resumes. A run with a different intervention, checkpoint,
 seed manifest, denoising-step count, or spatial strength is rejected rather than
 mixed into an existing directory.
+
+The Colab runner enables `--tile-folder-layout`, producing the review-friendly
+layout below while retaining `images.csv`, `pairs.jsonl`, and
+`run_manifest.json` in each experiment directory:
+
+```text
+CPathOGen_Counterfactuals/
+├── peritumoral_immune_ring_diameter40px/
+│   └── <tile-stem>/
+│       ├── peritumoral_ring_plus_80.png
+│       ├── peritumoral_ring_plus_160.png
+│       └── peritumoral_ring_plus_320.png
+└── tumor_immune_separation_diameter40px/
+    └── <tile-stem>/
+        ├── tumor_immune_maximal_mixing.png
+        ├── tumor_immune_low_separation.png
+        ├── tumor_immune_intermediate.png
+        ├── tumor_immune_high_separation.png
+        └── tumor_immune_maximal_segregation.png
+```
+
+## Organize the three completed morphology panels
+
+`organize_bucket_experiments.py` reads the public provenance manifests for
+nuclear enlargement, nuclear shape irregularity, and stain brightness. It
+groups all 21,000 available images as
+`<experiment>/<tile>/<condition>.png`. Existing non-empty Drive files and
+pre-existing GCS objects are skipped, so the operation is resumable.
+
+The live manifests expose an important cohort mismatch that the organizer
+retains rather than hiding. Nuclear shape irregularity has 1,000 complete
+seven-condition panels. Nuclear enlargement and stain brightness each have 770
+complete panels, 230 four-image base-only panels, and 230 three-image
+signed-extension-only panels (1,230 tile folders per experiment). The mapping
+CSV and summary JSON report this completeness explicitly.
+
+The source bucket is never changed. Passing a GCS destination creates a
+non-destructive organized copy and uploads the 21,000-row mapping manifest:
+
+```bash
+python workflows/05_generate_counterfactuals/organize_bucket_experiments.py \
+  --drive-root /content/drive/MyDrive/PTRI/CVPR/CPathOGen_Counterfactuals \
+  --gcs-destination gs://cpathogen_artifacts/organized_counterfactuals \
+  --project centering-brook-456818-e8 --drive-workers 2 --gcs-workers 8
+```
