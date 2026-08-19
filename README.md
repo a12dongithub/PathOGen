@@ -10,10 +10,19 @@ Included:
 - loading aligned five-channel spatial maps and standardized 16-value vectors;
 - defining in-memory experimental interventions;
 - matched-noise baseline/counterfactual sampling; and
-- run and pair manifests for downstream classifier experiments.
+- run and pair manifests for downstream classifier experiments;
+- patient-disjoint PAM50 and censor-aware survival probes for UNI2-h,
+  CTransPath, Virchow2, and ResNet50; and
+- transfer evaluation adapters for PathLUPI, OTSurv, and CPMP, including
+  counterfactual JSONL outputs.
 
-Excluded: training, CellViT++ annotation, condition building, FID/KID,
-candidate ranking, notebooks, historical experiments, and vendored code.
+Excluded: foundation-model pretraining, CellViT++ annotation, condition
+building, FID/KID, candidate ranking, notebooks, historical experiments, and
+vendored third-party repositories.
+
+See
+[`workflows/10_train_evaluate_endpoint_models/README.md`](workflows/10_train_evaluate_endpoint_models/README.md)
+for the endpoint and XAI evaluation protocol.
 
 ## Required local assets
 
