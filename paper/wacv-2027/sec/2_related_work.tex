@@ -1,0 +1,32 @@
+\section{Related Work}
+\label{sec:related}
+
+\subsection{Controllable histopathology generation}
+
+Generative pathology systems are commonly developed for augmentation, stain transfer, class conditioning, or realistic tissue synthesis. Visual realism and class consistency, however, do not guarantee that cells of a requested type appear at requested coordinates or that a small morphology intervention is expressed monotonically. \method{} treats cellular structure and morphology as measurable controls and re-extracts them from every generated output. This positions the generator as an experimental instrument rather than only a source of synthetic training images.
+
+\subsection{Diffusion-based image control}
+
+Conditional diffusion models support text, segmentation, edge, depth, and layout guidance. Dense conditioning is well suited to cellular maps because it preserves local organization, while global conditioning is better suited to patch-level morphology and stain summaries. \method{} combines both: spatial information enters at latent resolution and morphology modulates denoising blocks throughout the network. Unlike unrestricted editing, the intervention space is tied to quantities that can be recovered by pathology analysis tools.
+
+\begin{figure*}[!t]
+    \centering
+    \IfFileExists{CVPR_CV4Science_SamarthSinghal.pdf}{%
+        \includegraphics[page=1,width=1.2\textwidth,height=0.30\textheight,keepaspectratio]{CVPR_CV4Science_SamarthSinghal.pdf}%
+    }{%
+        \figureplaceholder{0.96\textwidth}{0.255\textheight}{%
+            \Large Figure file not present in the local build\\[2mm]
+            \normalsize Overleaf will load \texttt{CVPR\_CV4Science\_SamarthSinghal.pdf}.}%
+    }
+    \vspace{-12mm}
+    \caption{Overview of \method{}. Spatial maps and morphology/appearance controls condition diffusion synthesis; candidate selection and independent cellular auditing produce fidelity-checked counterfactuals for downstream model probing.}
+    \label{fig:overview}
+\end{figure*}
+
+\subsection{Counterfactual explanations}
+
+Image counterfactuals modify pixels, latent codes, semantic regions, or concepts to test model behavior. Their evidential value depends on realism, specificity, and a comparable perturbation budget. These requirements are especially important in pathology, where small color or focus artifacts can dominate predictions. Our protocol uses shared noise for paired generation and verifies the requested change after synthesis. Candidate selection never observes the downstream score, desired label, explanation map, or whether the prediction moved in the expected direction.
+
+\subsection{Pathology models and cellular analysis}
+
+Foundation encoders produce representations rather than clinical predictions, whereas classifiers, multiple-instance learning models, and survival systems add task supervision and aggregation. We therefore treat representation movement and task-output movement as separate endpoints. Cellular evaluation also risks circularity because similar tools create and verify spatial conditions. We report the in-loop \cellvit{} measurement alongside the independent \hovernet{} and segmentation-only \stardist{} analyses. Cross-analyzer agreement provides stronger evidence than agreement with the selector alone, while disagreement reveals sensitivity to taxonomy and boundary conventions.

@@ -1,0 +1,46 @@
+\section{Method}
+\label{sec:method}
+
+\subsection{Conditional H\&E synthesis}
+
+Let $S\in[0,1]^{5\times512\times512}$ denote a dense spatial condition and $m\in\mathbb{R}^{16}$ a standardized morphology/appearance condition. The spatial channels encode tumor, inflammatory, epithelial, connective/stromal, and necrotic compartments. The global vector stores paired summary statistics for nuclear size, perimeter, eccentricity, solidity, image gradient, and RGB appearance in the exact feature order used during training.
+
+A convolutional encoder downsamples the map to latent resolution,
+\begin{equation}
+    c_s=E_s(S), \qquad c_s\in\mathbb{R}^{4\times64\times64}.
+    \label{eq:spatial_encoder}
+\end{equation}
+At diffusion step $t$, the encoded condition is concatenated with the four-channel noisy latent,
+\begin{equation}
+    \widetilde z_t=[z_t;c_s]\in\mathbb{R}^{8\times64\times64}.
+    \label{eq:latent_concat}
+\end{equation}
+The first U-Net convolution is expanded from four to eight input channels. Pretrained latent weights initialize the original channels; the new condition channels are zero-initialized so that optimization begins from the image prior and progressively learns spatial control.
+
+\subsection{Morphology and appearance modulation}
+
+Each residual block receives a learned channel-wise affine transformation. For block $\ell$, a two-layer mapping produces scale and shift vectors,
+\begin{equation}
+ (\gamma_\ell,\beta_\ell)=f_\ell(m),\qquad
+ h'_\ell=(1+\gamma_\ell)\odot h_\ell+\beta_\ell.
+ \label{eq:film}
+\end{equation}
+Blockwise FiLM allows geometry, texture, and stain summaries to influence the full denoising hierarchy instead of entering only at the bottleneck. Scale and shift are bounded to prevent unstable extrapolation. At inference, each control is restricted to the range represented by the frozen training preprocessing artifact.
+
+\subsection{Condition preprocessing}
+
+Preprocessing is part of the model rather than a user-interface convenience. Scaler fitting follows patient/slide splitting. The training artifact records feature names and order, center and scale, optional transforms, clipping thresholds, and a version identifier. The same artifact is used for training, validation, interactive generation, and batch experiments. This is especially important for RGB controls: a raw-versus-standardized mismatch or feature-order error can create globally incorrect stain even when spatial synthesis remains plausible.
+
+\subsection{Paired interventions}
+
+For source condition $c=(S,m)$ and noise $\epsilon$, a pair is
+\begin{equation}
+ x^- =G(S,m,\epsilon),\qquad
+ x^+=G(\mathcal I_S(S),\mathcal I_m(m),\epsilon).
+ \label{eq:counterfactual}
+\end{equation}
+Only one intervention family is active unless an interaction is explicitly tested. Stain experiments hold spatial structure and geometry fixed. Morphology experiments sweep one feature while retaining color and space. Spatial experiments change composition, density, distance, or mixing while retaining morphology. Shared noise reduces stochastic variation, but recovered conditions are still measured rather than assumed.
+
+\subsection{Prediction-independent candidate selection}
+
+For each requested condition, eight random seeds produce a fixed candidate set. \cellvit{} is applied to each candidate and its nuclei are compared with the input map. A detected nucleus receives positive credit when a same-type requested nucleus lies within 50 pixels, zero credit for a nearby different type, and a penalty when no requested nucleus is nearby. The highest-scoring candidate is selected. Ties are resolved deterministically. Because selection can improve reported realism at the cost of coverage and compute, Table~\ref{tab:realism} reports both the unfiltered and selected distributions.
