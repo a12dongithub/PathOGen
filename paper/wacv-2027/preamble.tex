@@ -1,0 +1,24 @@
+% Complex imported vector PDFs can overflow pdfLaTeX's compressed-object buffer.
+% Disabling object-stream compression keeps the Overleaf build reliable; XeTeX
+% and other engines simply skip this pdfTeX-specific setting.
+\ifdefined\pdfobjcompresslevel
+  \pdfobjcompresslevel=0
+\fi
+
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{graphicx}
+\usepackage{microtype}
+% Ensure the WACV style's Times bold/italic shapes resolve under XeTeX/Tectonic.
+\usepackage[T1]{fontenc}
+\usepackage{adjustbox}
+
+\newcommand{\method}{CPathOGen}
+\newcommand{\cellvit}{CellViT++}
+\newcommand{\hovernet}{HoVer-Net}
+\newcommand{\stardist}{StarDist}
+\newcommand{\figureplaceholder}[3]{%
+  \fbox{\parbox[c][#2][c]{#1}{\centering\color{gray}#3}}%
+}

@@ -1,0 +1,44 @@
+% CPathOGen -- WACV 2027 review manuscript
+\documentclass[10pt,twocolumn,letterpaper]{article}
+
+% Switch to [review,applications] if submitting to the applications track.
+\usepackage[review,algorithms]{wacv}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{tabularx}
+\usepackage{array}
+\usepackage{makecell}
+\input{preamble}
+
+\definecolor{wacvblue}{rgb}{0.21,0.49,0.74}
+\usepackage[pagebackref,breaklinks,colorlinks,allcolors=wacvblue]{hyperref}
+
+\def\wacvPaperID{*****}
+\def\confName{WACV}
+\def\confYear{2027}
+
+\title{CPathOGen: Spatially and Morphologically Controlled H\&E Counterfactuals for Probing Pathology Models}
+\author{Anonymous \confName~\confYear Submission}
+
+\begin{document}
+\maketitle
+
+\input{sec/0_abstract}
+\input{sec/1_introduction}
+\input{sec/2_related_work}
+\input{sec/3_method}
+\input{sec/4_experiments}
+\input{sec/5_results}
+\input{sec/6_probing}
+\input{sec/7_discussion}
+\input{sec/8_acknowledgement}
+
+{\small
+\bibliographystyle{ieeenat_fullname}
+\bibliography{main}
+}
+
+\end{document}
+
+
+% add about dataset

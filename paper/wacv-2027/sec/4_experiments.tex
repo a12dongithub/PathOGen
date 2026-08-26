@@ -1,0 +1,25 @@
+\section{Experiments}
+\label{sec:experiments}
+\subsection{Experimental Setup}
+
+The diffusion model is trained on more than one million H\&E patches with aligned $512\!\times\!512$ cellular maps and morphology vectors. Evaluation uses held-out cases only. The reported checkpoint is the 30,000-step PathOGen model used for all three tables; no retraining or test-time parameter fitting is performed between evaluations. Source cases are sampled deterministically, and image-level results are joined by case identifier to prevent accidental mismatches between maps, conditions, generations, and cellular predictions.
+
+\subsection{Realism protocol}
+
+FID and KID use 2,000 generated images and a matched real reference set under one frozen implementation. The unfiltered row uses one generation per condition without seed-based rejection. The selected row uses the eight-seed procedure in Sec.~\ref{sec:method}. KID is reported as its raw mean and subset standard deviation. Since candidate selection changes the generation budget, the selected result is not presented as a replacement for unfiltered performance; it quantifies the quality--compute trade-off available to counterfactual studies that require one reliable sample per condition.
+
+\subsection{Spatial fidelity}
+
+Spatial fidelity is measured on $N=1{,}000$ selected images. For each image, input-map nuclei are compared with nuclei recovered by \cellvit{}, \hovernet{}, and \stardist{}. Total-count and per-type-count fidelity are Spearman correlations across images. The per-type value macro-averages neoplastic/tumor, inflammatory/immune, connective/stromal, dead, and non-neoplastic epithelial types. \stardist{} is segmentation-only, so typed counts are not reported.
+
+Centroid F1 uses one-to-one Hungarian matching at radii of 25 and 50 pixels. Matches are type-aware for \cellvit{} and \hovernet{} and position-only for \stardist{}. A random-tile control pairs each source condition with a real tile from another patient. This control has realistic cellular texture by construction but should have little correspondence to the requested map, separating map fidelity from the tendency of an analyzer to detect plausible nuclei in any H\&E image.
+
+\subsection{Morphology fidelity}
+
+We evaluate both observational and intervention fidelity. The across-image analysis correlates each requested feature with its recovered value over $N=1{,}000$ selected images. The within-image analysis uses 200 source conditions. For each of seven controls, the requested mean is swept over $\{-1,-0.5,0,0.5,1\}$ standard deviations while the random seed, spatial map, and other morphology entries remain fixed, yielding 7,000 controlled images. The reported within-image statistic is the median per-source Spearman correlation across the dose sweep.
+
+Nuclear size, eccentricity, and solidity are computed from predicted contours. Gradient and RGB measurements are aggregated within predicted nuclear regions, which couples appearance measurement to each analyzer's segmentation but not to its cell taxonomy. Nuclear perimeter is retained by the model but omitted from the compact table because of its strong relationship with area. The macro score is the unweighted mean of the seven displayed features.
+
+\subsection{Independence and reporting}
+
+\cellvit{} is an in-loop evaluator because it selects the candidate. \hovernet{} and \stardist{} are out-of-loop checks and never affect selection. This distinction is carried into every table and claim. No sample is removed based on a downstream model response. All controls, seeds, radii, and dose levels are fixed before downstream probing.

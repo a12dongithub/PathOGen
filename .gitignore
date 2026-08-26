@@ -15,3 +15,11 @@ tmp/
 *.synctex.gz
 *.toc
 *.xdv
+
+# Caches, checkpoints, and generated experiment outputs
+**/__pycache__/
+**/*.pyc
+**/outputs/
+**/results/
+**/checkpoints/
+**/*.zip
