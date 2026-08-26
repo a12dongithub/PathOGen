@@ -1,0 +1,17 @@
+.DS_Store
+
+# Temporary build trees and rendered QA images
+tmp/
+
+# LaTeX and Tectonic intermediates
+*.aux
+*.bbl
+*.blg
+*.brf
+*.fdb_latexmk
+*.fls
+*.log
+*.out
+*.synctex.gz
+*.toc
+*.xdv
