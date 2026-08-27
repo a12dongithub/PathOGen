@@ -20,6 +20,7 @@ from cpathogen.endpoints.encoders import (
     release_encoder,
 )
 from cpathogen.endpoints.jsonio import write_jsonl
+from cpathogen.endpoints.paper_xai import filter_paper_variants
 from cpathogen.endpoints.probes import assign_pam50_folds, assign_survival_folds
 from cpathogen.endpoints.variants import (
     discover_variant_manifests,
@@ -46,6 +47,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--num-workers", type=int, default=4)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--device", default="auto", choices=("auto", "cuda", "cpu"))
+    parser.add_argument(
+        "--paper-five-only",
+        action="store_true",
+        help="Embed only the reference/target images used by the five paper columns.",
+    )
     return parser.parse_args()
 
 
@@ -255,6 +261,8 @@ def main() -> None:
     if not paths:
         raise SystemExit("Supply --variant-root or --variant-manifests")
     variants = normalize_variant_manifests(paths)
+    if args.paper_five_only:
+        variants = filter_paper_variants(variants)
     variants.to_csv(
         args.output_root / "counterfactual_variant_manifest.csv", index=False
     )

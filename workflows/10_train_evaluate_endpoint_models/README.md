@@ -66,6 +66,29 @@ prediction, and matched-baseline prediction. CSV/Parquet hold rectangular cohort
 data; JSON and JSONL hold metrics, provenance, and nested multiclass/survival
 predictions.
 
+## Virchow2 paper-table run
+
+Virchow2 can be run independently after its Hugging Face license has been
+accepted. Use `--encoders virchow2` for both foundation-model commands. Add
+`--paper-five-only` while scoring variants to retain only the conditions used
+by the paper columns: stain brightness, nuclear enlargement, nuclear shape
+irregularity, immune burden, and tumor--immune mixing. This avoids embedding
+unused signed-dose images.
+
+After scoring, export the two insertion-ready rows with:
+
+```bash
+python workflows/10_train_evaluate_endpoint_models/export_virchow2_paper_rows.py \
+  --output-root /path/to/endpoint_models_virchow2
+```
+
+The command prints only the PAM50 and overall-survival paper columns. It also
+writes separate one-row CSV files and a LaTeX fragment under
+`models/virchow2/paper_table/`. Performance is macro one-vs-rest AUC for PAM50
+and C-index for survival. Intervention cells are `TVD / prediction-flip rate`,
+and BNR uses the mean TVD of the four biological interventions divided by the
+stain-brightness TVD, matching the existing table.
+
 ## Access requirements
 
 UNI2-h, Virchow2, CONCH, and original UNI are gated Hugging Face repositories.
