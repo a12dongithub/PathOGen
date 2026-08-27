@@ -1,229 +1,222 @@
-\section{Generator Fidelity}
-\label{sec:results}
+% \section{Generator Fidelity}
+% \label{sec:results}
 
-\subsection{Distributional realism}
+% \subsection{Distributional realism}
 
-Table~\ref{tab:realism} reports the matched realism comparison. The unfiltered model obtains FID 42.92 and KID $0.02466\pm0.00340$. Eight-seed spatial-agreement selection improves FID by 6.21 points (14.5\% relative) and lowers mean KID by 20.3\%. These gains show that seed-dependent failures are sufficiently structured to be detected by cellular agreement. They do not imply that selection is free: eight candidates are generated for each retained output, and the selector introduces a known \cellvit{} dependence that must be audited independently.
+% Table~\ref{tab:realism} reports the matched realism comparison. The unfiltered model obtains FID 42.92 and KID $0.02466\pm0.00340$. Eight-seed spatial-agreement selection improves FID by 6.21 points (14.5\% relative) and lowers mean KID by 20.3\%. These gains show that seed-dependent failures are sufficiently structured to be detected by cellular agreement. They do not imply that selection is free: eight candidates are generated for each retained output, and the selector introduces a known \cellvit{} dependence that must be audited independently.
 
-\begin{table}
-\centering
-\caption{Held-out realism on 10,000 generated images. KID is the raw mean $\pm$ subset standard deviation. Both rows use the same real reference set and metric implementation.}
-\label{tab:realism}
-\setlength{\tabcolsep}{2.5pt}
-\begin{tabular}{lcc}
-\toprule
-Evaluation set & FID $\downarrow$ & KID $\downarrow$ \\
-\midrule
-No seed filtering & 42.923 & $0.02466\!\pm\!0.00340$ \\
-\cellvit{} selected & \textbf{36.717} & $\mathbf{0.01964\!\pm\!0.00332}$ \\
-Real vs Real & 15.653 & $0.02466\!\pm\!0.00340$ \\ % re calculate for confirm
-\bottomrule
-\end{tabular}
-\end{table}
+% \begin{table}
+% \centering
+% \caption{Held-out realism on 10,000 generated images. KID is the raw mean $\pm$ subset standard deviation. Both rows use the same real reference set and metric implementation.}
+% \label{tab:realism}
+% \setlength{\tabcolsep}{2.5pt}
+% \begin{tabular}{lcc}
+% \toprule
+% Evaluation set & FID $\downarrow$ & KID $\downarrow$ \\
+% \midrule
+% No seed filtering & 42.923 & $0.02466$ \\
+% \cellvit{} selected & \textbf{36.717} & $\mathbf{0.01964}$ \\
+% Real vs Real & 16.369 & $0.006466$ \\ % re calculate for confirm
+% \bottomrule
+% \end{tabular}
+% \end{table}
 
-\subsection{Spatial fidelity}
+% \subsection{Spatial fidelity}
 
-Table~\ref{tab:spatial} shows that recovered cell burden tracks the map strongly for all analyzers. \cellvit{} reaches total-count $\rho=0.952$; importantly, \hovernet{} and \stardist{} retain correlations of 0.908 and 0.928. The random-real-tile correlation is near zero, indicating that the result is specific to the requested condition rather than a generic property of realistic tiles.
+% Table~\ref{tab:spatial} shows that recovered cell burden tracks the map strongly for all analyzers. \cellvit{} reaches total-count $\rho=0.952$; importantly, \hovernet{} and \stardist{} retain correlations of 0.908 and 0.928. The random-real-tile correlation is near zero, indicating that the result is specific to the requested condition rather than a generic property of realistic tiles.
 
-\begin{figure}[t]
-\centering
-\scriptsize
-\setlength{\tabcolsep}{1pt}
+% \begin{figure}[t]
+% \centering
+% \scriptsize
+% \setlength{\tabcolsep}{1pt}
 
-\begin{tabular}{@{}ccc@{}}
-\textbf{Cell map} & \textbf{Real H\&E} & \textbf{Generated H\&E} \\[-1pt]
+% \begin{tabular}{@{}ccc@{}}
+% \textbf{Cell map} & \textbf{Real H\&E} & \textbf{Generated H\&E} \\[-1pt]
 
-\includegraphics[width=0.31\columnwidth]
-{00_baseline_assets/foundational__TCGA-A2-A0CW_x65536_y47104_TL__seed_0000029256/paper_map.png}
-&
-\includegraphics[width=0.31\columnwidth]
-{00_baseline_assets/foundational__TCGA-A2-A0CW_x65536_y47104_TL__seed_0000029256/source_real.png}
-&
-\includegraphics[width=0.31\columnwidth]
-{00_baseline_assets/foundational__TCGA-A2-A0CW_x65536_y47104_TL__seed_0000029256/generated.png}
-\\[1pt]
+% \includegraphics[width=0.31\columnwidth]
+% {00_baseline_assets/foundational__TCGA-A2-A0CW_x65536_y47104_TL__seed_0000029256/paper_map.png}
+% &
+% \includegraphics[width=0.31\columnwidth]
+% {00_baseline_assets/foundational__TCGA-A2-A0CW_x65536_y47104_TL__seed_0000029256/source_real.png}
+% &
+% \includegraphics[width=0.31\columnwidth]
+% {00_baseline_assets/foundational__TCGA-A2-A0CW_x65536_y47104_TL__seed_0000029256/generated.png}
+% \\[1pt]
 
-\includegraphics[width=0.31\columnwidth]
-{00_baseline_assets/foundational__TCGA-A8-A083_x14336_y30720_BR__seed_0000032098/paper_map.png}
-&
-\includegraphics[width=0.31\columnwidth]
-{00_baseline_assets/foundational__TCGA-A8-A083_x14336_y30720_BR__seed_0000032098/source_real.png}
-&
-\includegraphics[width=0.31\columnwidth]
-{00_baseline_assets/foundational__TCGA-A8-A083_x14336_y30720_BR__seed_0000032098/generated.png}
-\\[1pt]
+% \includegraphics[width=0.31\columnwidth]
+% {00_baseline_assets/foundational__TCGA-A8-A083_x14336_y30720_BR__seed_0000032098/paper_map.png}
+% &
+% \includegraphics[width=0.31\columnwidth]
+% {00_baseline_assets/foundational__TCGA-A8-A083_x14336_y30720_BR__seed_0000032098/source_real.png}
+% &
+% \includegraphics[width=0.31\columnwidth]
+% {00_baseline_assets/foundational__TCGA-A8-A083_x14336_y30720_BR__seed_0000032098/generated.png}
+% \\[1pt]
 
-\includegraphics[width=0.31\columnwidth]
-{00_baseline_assets/035__TCGA-AR-A5QQ_x40960_y31744_BL__seed_1404673085/paper_map.png}
-&
-\includegraphics[width=0.31\columnwidth]
-{00_baseline_assets/035__TCGA-AR-A5QQ_x40960_y31744_BL__seed_1404673085/source_real.png}
-&
-\includegraphics[width=0.31\columnwidth]
-{00_baseline_assets/035__TCGA-AR-A5QQ_x40960_y31744_BL__seed_1404673085/generated.png}
-\\
-\end{tabular}
+% \includegraphics[width=0.31\columnwidth]
+% {00_baseline_assets/035__TCGA-AR-A5QQ_x40960_y31744_BL__seed_1404673085/paper_map.png}
+% &
+% \includegraphics[width=0.31\columnwidth]
+% {00_baseline_assets/035__TCGA-AR-A5QQ_x40960_y31744_BL__seed_1404673085/source_real.png}
+% &
+% \includegraphics[width=0.31\columnwidth]
+% {00_baseline_assets/035__TCGA-AR-A5QQ_x40960_y31744_BL__seed_1404673085/generated.png}
+% \\
+% \end{tabular}
 
-\par\vspace{2pt}
-\begingroup
-\definecolor{mapcyan}{RGB}{0,255,255}
-\definecolor{mapgreen}{RGB}{0,255,0}
-\definecolor{mapyellow}{RGB}{255,255,0}
-\definecolor{maporange}{RGB}{255,128,0}
-\setlength{\fboxsep}{0pt}
+% \par\vspace{2pt}
+% \begingroup
+% \definecolor{mapcyan}{RGB}{0,255,255}
+% \definecolor{mapgreen}{RGB}{0,255,0}
+% \definecolor{mapyellow}{RGB}{255,255,0}
+% \definecolor{maporange}{RGB}{255,128,0}
+% \setlength{\fboxsep}{0pt}
 
-\newcommand{\mapkey}[2]{%
-  \raisebox{-0.25ex}{%
-    \fcolorbox{black}{#1}{%
-      \rule{0pt}{1.05ex}\rule{1.05ex}{0pt}%
-    }%
-  }\,#2%
-}
+% \newcommand{\mapkey}[2]{%
+%   \raisebox{-0.25ex}{%
+%     \fcolorbox{black}{#1}{%
+%       \rule{0pt}{1.05ex}\rule{1.05ex}{0pt}%
+%     }%
+%   }\,#2%
+% }
 
-\mapkey{white}{Tumor}\quad
-\mapkey{mapcyan}{Immune}\quad
-\mapkey{mapgreen}{Stroma}\\[-1pt]
-\mapkey{mapyellow}{Dead}\quad
-\mapkey{maporange}{Non-neoplastic epithelium}
-\endgroup
+% \mapkey{white}{Tumor}\quad
+% \mapkey{mapcyan}{Immune}\quad
+% \mapkey{mapgreen}{Stroma}\\[-1pt]
+% \mapkey{mapyellow}{Dead}\quad
+% \mapkey{maporange}{Non-neoplastic epithelium}
+% \endgroup
 
-\caption{Representative spatial conditioning maps, corresponding real
-H\&E tiles, and generated H\&E images. Rows show cases \#004, \#007,
-and \#035 from top to bottom. Each generated image is conditioned on
-the cellular map shown in the same row.}
-\label{fig:spatial_grid}
-\end{figure}
+% \caption{Representative spatial conditioning maps, corresponding real
+% H\&E tiles, and generated H\&E images. Rows show cases \#004, \#007,
+% and \#035 from top to bottom. Each generated image is conditioned on
+% the cellular map shown in the same row.}
+% \label{fig:spatial_grid}
+% \end{figure}
 
-Per-type count is harder than total count. \cellvit{} obtains 0.612 and the independent \hovernet{} obtains 0.525, consistent with both synthesis errors and differences in cellular taxonomy. Spatial localization remains strong: at 50 pixels, centroid F1 is 0.773, 0.668, and 0.831 for \cellvit{}, \hovernet{}, and \stardist{}, respectively. The higher segmentation-only \stardist{} F1 should not be interpreted as better typed fidelity because class agreement is not required. At both radii, all model-derived rows substantially exceed the random-tile control.
+% Per-type count is harder than total count. \cellvit{} obtains 0.612 and the independent \hovernet{} obtains 0.525, consistent with both synthesis errors and differences in cellular taxonomy. Spatial localization remains strong: at 50 pixels, centroid F1 is 0.773, 0.668, and 0.831 for \cellvit{}, \hovernet{}, and \stardist{}, respectively. The higher segmentation-only \stardist{} F1 should not be interpreted as better typed fidelity because class agreement is not required. At both radii, all model-derived rows substantially exceed the random-tile control.
 
-\begin{table*}[t]
-\centering
-\caption{Spatial fidelity on $N=1{,}000$ selected images. Count columns are Spearman correlations with the input map. Centroid F1 uses one-to-one matching; typed analyzers additionally require class agreement. The random-tile row pairs each condition with a real tile from another patient.}
-\label{tab:spatial}
-\setlength{\tabcolsep}{7pt}
-\begin{tabular}{lcccc}
-\toprule
-Method & Total count $\rho\uparrow$ & Per-type count $\rho\uparrow$ & Centroid F1 @ 25 px $\uparrow$ & Centroid F1 @ 50 px $\uparrow$ \\
-\midrule
-\cellvit{} & \textbf{0.952} & \textbf{0.612} & 0.726 & 0.773 \\
-\hovernet{} & 0.908 & 0.525 & 0.625 & 0.668 \\
-\stardist{} & 0.928 & N/A & \textbf{0.798} & \textbf{0.831} \\
-Random real tile & $-0.031$ & $-0.020$ & 0.134 & 0.255 \\
-\bottomrule
-\end{tabular}
-\end{table*}
-
-
-
-\subsection{Morphology and appearance fidelity}
-
-Across images, \cellvit{} produces a macro correlation of 0.876, while the out-of-loop \hovernet{} and \stardist{} produce 0.843 and 0.855 (Table~\ref{tab:morphology}). Nuclear size and RGB controls are particularly consistent. Solidity is the most difficult feature, falling to 0.499 for \hovernet{}. This pattern is plausible because solidity is sensitive to small contour irregularities and analyzer-specific boundary placement.
-
-The controlled within-image analysis asks a stricter question: when one input is changed and all other modeled factors are fixed, does the recovered measurement move monotonically? Median correlations are 0.986 for both typed analyzers and 0.929 for \stardist{}. Perfect values for several controls indicate monotonic ordering over the five requested levels, not exact numerical calibration. The lower \stardist{} solidity value again localizes the main disagreement to boundary shape. Agreement in red, green, blue, and gradient across independent segmenters is encouraging given the observed sensitivity of image realism to color preprocessing.
-
-\begin{table*}[t]
-\centering
-\caption{Morphology fidelity. Across-image rows use $N=1{,}000$ selected images. Controlled rows report the median within-source Spearman correlation over five same-seed dose levels for 200 sources. Macro $\rho$ is the unweighted mean of the seven features.}
-\label{tab:morphology}
-\small
-\begin{tabular*}{\textwidth}{@{\extracolsep{\fill}}lcccccccc@{}}
-\toprule
-Method & Size & Eccentricity & Solidity & Gradient & Red & Green & Blue & Macro \\
- & $\rho\uparrow$ & $\rho\uparrow$ & $\rho\uparrow$ & $\rho\uparrow$ & $\rho\uparrow$ & $\rho\uparrow$ & $\rho\uparrow$ & $\rho\uparrow$ \\
-\midrule
-Across images \cellvit{} & \textbf{0.941} & \textbf{0.820} & \textbf{0.649} & 0.878 & \textbf{0.951} & \textbf{0.961} & \textbf{0.928} & \textbf{0.876} \\
-Across images \hovernet{} & 0.896 & 0.798 & 0.499 & 0.886 & 0.942 & 0.958 & 0.925 & 0.843 \\
-Across images \stardist{} & 0.935 & 0.760 & 0.570 & \textbf{0.892} & 0.950 & 0.954 & \textbf{0.928} & 0.855 \\
-\midrule
-Controlled \cellvit{} & \textbf{1.000} & \textbf{1.000} & \textbf{0.900} & \textbf{1.000} & \textbf{1.000} & \textbf{1.000} & \textbf{1.000} & \textbf{0.986} \\
-Controlled \hovernet{} & \textbf{1.000} & \textbf{1.000} & \textbf{0.900} & \textbf{1.000} & \textbf{1.000} & \textbf{1.000} & \textbf{1.000} & \textbf{0.986} \\
-Controlled \stardist{} & \textbf{1.000} & \textbf{1.000} & 0.500 & \textbf{1.000} & \textbf{1.000} & \textbf{1.000} & \textbf{1.000} & 0.929 \\
-\bottomrule
-\end{tabular*}
-\end{table*}
+% \begin{table*}[t]
+% \centering
+% \caption{Spatial fidelity on $N=1{,}000$ selected images. Count columns are Spearman correlations with the input map. Centroid F1 uses one-to-one matching; typed analyzers additionally require class agreement. The random-tile row pairs each condition with a real tile from another patient.}
+% \label{tab:spatial}
+% \setlength{\tabcolsep}{7pt}
+% \begin{tabular}{lcccc}
+% \toprule
+% Method & Total count $\rho\uparrow$ & Per-type count $\rho\uparrow$ & Centroid F1 @ 25 px $\uparrow$ & Centroid F1 @ 50 px $\uparrow$ \\
+% \midrule
+% \cellvit{} & \textbf{0.952} & \textbf{0.612} & 0.726 & 0.773 \\
+% \hovernet{} & 0.908 & 0.525 & 0.625 & 0.668 \\
+% \stardist{} & 0.928 & N/A & \textbf{0.798} & \textbf{0.831} \\
+% Random real tile & $-0.031$ & $-0.020$ & 0.134 & 0.255 \\
+% \bottomrule
+% \end{tabular}
+% \end{table*}
 
 
-\begin{figure*}[t]
-\centering
-\scriptsize
-\setlength{\tabcolsep}{1pt}
-\renewcommand{\arraystretch}{0.98}
 
-\newcommand{\morphtile}[2]{%
-  \includegraphics[width=\linewidth]
-  {01_morphology_controls/#1/#2.png}%
-}
+% \subsection{Morphology and appearance fidelity}
 
-\begin{tabular}{@{}
-  >{\raggedleft\arraybackslash}m{0.115\textwidth}
-  *{5}{>{\centering\arraybackslash}m{0.15\textwidth}}
-  @{}}
- & $-2$ SD & $-1$ SD & $0$ SD & $+1$ SD & $+2$ SD \\
+% Across images, \cellvit{} produces a macro correlation of 0.876, while the out-of-loop \hovernet{} and \stardist{} produce 0.843 and 0.855 (Table~\ref{tab:morphology}). Nuclear size and RGB controls are particularly consistent. Solidity is the most difficult feature, falling to 0.499 for \hovernet{}. This pattern is plausible because solidity is sensitive to small contour irregularities and analyzer-specific boundary placement.
 
-Nuclear size
-& \morphtile{nuclear_size}{minus_2sd}
-& \morphtile{nuclear_size}{minus_1sd}
-& \morphtile{nuclear_size}{zero_sd}
-& \morphtile{nuclear_size}{plus_1sd}
-& \morphtile{nuclear_size}{plus_2sd}
-\\[1pt]
+% The controlled within-image analysis asks a stricter question: when one input is changed and all other modeled factors are fixed, does the recovered measurement move monotonically? Median correlations are 0.986 for both typed analyzers and 0.929 for \stardist{}. Perfect values for several controls indicate monotonic ordering over the five requested levels, not exact numerical calibration. The lower \stardist{} solidity value again localizes the main disagreement to boundary shape. Agreement in red, green, blue, and gradient across independent segmenters is encouraging given the observed sensitivity of image realism to color preprocessing.
 
-Eccentricity
-& \morphtile{eccentricity}{minus_2sd}
-& \morphtile{eccentricity}{minus_1sd}
-& \morphtile{eccentricity}{zero_sd}
-& \morphtile{eccentricity}{plus_1sd}
-& \morphtile{eccentricity}{plus_2sd}
-\\[1pt]
+% \begin{table*}[t]
+% \centering
+% \caption{Morphology fidelity. Across-image rows use $N=1{,}000$ selected images. Controlled rows report the median within-source Spearman correlation over five same-seed dose levels for 200 sources. Macro $\rho$ is the unweighted mean of the seven features.}
+% \label{tab:morphology}
+% \small
+% \begin{tabular*}{\textwidth}{@{\extracolsep{\fill}}lcccccccc@{}}
+% \toprule
+% Method & Size & Eccentricity & Solidity & Gradient & Red & Green & Blue & Macro \\
+%  & $\rho\uparrow$ & $\rho\uparrow$ & $\rho\uparrow$ & $\rho\uparrow$ & $\rho\uparrow$ & $\rho\uparrow$ & $\rho\uparrow$ & $\rho\uparrow$ \\
+% \midrule
+% Across images \cellvit{} & \textbf{0.941} & \textbf{0.820} & \textbf{0.649} & 0.878 & \textbf{0.951} & \textbf{0.961} & \textbf{0.928} & \textbf{0.876} \\
+% Across images \hovernet{} & 0.896 & 0.798 & 0.499 & 0.886 & 0.942 & 0.958 & 0.925 & 0.843 \\
+% Across images \stardist{} & 0.935 & 0.760 & 0.570 & \textbf{0.892} & 0.950 & 0.954 & \textbf{0.928} & 0.855 \\
+% \midrule
+% Controlled \cellvit{} & \textbf{1.000} & \textbf{1.000} & \textbf{0.900} & \textbf{1.000} & \textbf{1.000} & \textbf{1.000} & \textbf{1.000} & \textbf{0.986} \\
+% Controlled \hovernet{} & \textbf{1.000} & \textbf{1.000} & \textbf{0.900} & \textbf{1.000} & \textbf{1.000} & \textbf{1.000} & \textbf{1.000} & \textbf{0.986} \\
+% Controlled \stardist{} & \textbf{1.000} & \textbf{1.000} & 0.500 & \textbf{1.000} & \textbf{1.000} & \textbf{1.000} & \textbf{1.000} & 0.929 \\
+% \bottomrule
+% \end{tabular*}
+% \end{table*}
 
-Solidity
-& \morphtile{solidity}{minus_2sd}
-& \morphtile{solidity}{minus_1sd}
-& \morphtile{solidity}{zero_sd}
-& \morphtile{solidity}{plus_1sd}
-& \morphtile{solidity}{plus_2sd}
-\\[1pt]
+% \begin{figure*}[t]
+% \centering
+% \scriptsize
+% \setlength{\tabcolsep}{1pt}
+% \renewcommand{\arraystretch}{0.98}
 
-Gradient
-& \morphtile{gradient}{minus_2sd}
-& \morphtile{gradient}{minus_1sd}
-& \morphtile{gradient}{zero_sd}
-& \morphtile{gradient}{plus_1sd}
-& \morphtile{gradient}{plus_2sd}
-\\[1pt]
+% \newcommand{\morphtile}[2]{%
+%   \includegraphics[width=\linewidth]
+%   {01_morphology_controls/#1/#2.png}%
+% }
 
-Red
-& \morphtile{red}{minus_2sd}
-& \morphtile{red}{minus_1sd}
-& \morphtile{red}{zero_sd}
-& \morphtile{red}{plus_1sd}
-& \morphtile{red}{plus_2sd}
-\\[1pt]
+% \begin{tabular}{@{}
+%   >{\raggedleft\arraybackslash}m{0.075\textwidth}
+%   *{7}{>{\centering\arraybackslash}m{0.125\textwidth}}
+%   @{}}
+%  & Nuclear size & Eccentricity & Solidity & Gradient & Red & Green & Blue \\
 
-Green
-& \morphtile{green}{minus_2sd}
-& \morphtile{green}{minus_1sd}
-& \morphtile{green}{zero_sd}
-& \morphtile{green}{plus_1sd}
-& \morphtile{green}{plus_2sd}
-\\[1pt]
+% $-2$ SD
+% & \morphtile{nuclear_size}{minus_2sd}
+% & \morphtile{eccentricity}{minus_2sd}
+% & \morphtile{solidity}{minus_2sd}
+% & \morphtile{gradient}{minus_2sd}
+% & \morphtile{red}{minus_2sd}
+% & \morphtile{green}{minus_2sd}
+% & \morphtile{blue}{minus_2sd}
+% \\[1pt]
 
-Blue
-& \morphtile{blue}{minus_2sd}
-& \morphtile{blue}{minus_1sd}
-& \morphtile{blue}{zero_sd}
-& \morphtile{blue}{plus_1sd}
-& \morphtile{blue}{plus_2sd}
-\\
-\end{tabular}
+% $-1$ SD
+% & \morphtile{nuclear_size}{minus_1sd}
+% & \morphtile{eccentricity}{minus_1sd}
+% & \morphtile{solidity}{minus_1sd}
+% & \morphtile{gradient}{minus_1sd}
+% & \morphtile{red}{minus_1sd}
+% & \morphtile{green}{minus_1sd}
+% & \morphtile{blue}{minus_1sd}
+% \\[1pt]
 
-\caption{Controlled morphology and appearance interventions for a
-representative H\&E tile. Each row changes one morphology or appearance
-feature across five standardized dose levels while preserving the source
-spatial map, non-target controls, and diffusion seed.}
-\label{fig:morphology_grid}
-\end{figure*}
+% $0$ SD
+% & \morphtile{nuclear_size}{zero_sd}
+% & \morphtile{eccentricity}{zero_sd}
+% & \morphtile{solidity}{zero_sd}
+% & \morphtile{gradient}{zero_sd}
+% & \morphtile{red}{zero_sd}
+% & \morphtile{green}{zero_sd}
+% & \morphtile{blue}{zero_sd}
+% \\[1pt]
 
-\subsection{What the three tables establish}
+% $+1$ SD
+% & \morphtile{nuclear_size}{plus_1sd}
+% & \morphtile{eccentricity}{plus_1sd}
+% & \morphtile{solidity}{plus_1sd}
+% & \morphtile{gradient}{plus_1sd}
+% & \morphtile{red}{plus_1sd}
+% & \morphtile{green}{plus_1sd}
+% & \morphtile{blue}{plus_1sd}
+% \\[1pt]
 
-FID and KID establish distributional similarity but cannot demonstrate condition use. Spatial correlations establish map adherence but can be inflated by an in-loop analyzer. The independent rows reduce that concern, and the random-real-tile row shows that realistic tissue alone is insufficient. Finally, within-image dose response demonstrates that the FiLM controls alter the requested measurement in an ordered manner. Together, the evaluations support using generated pairs as controlled perturbations while still requiring per-sample verification for downstream interpretation.
+% $+2$ SD
+% & \morphtile{nuclear_size}{plus_2sd}
+% & \morphtile{eccentricity}{plus_2sd}
+% & \morphtile{solidity}{plus_2sd}
+% & \morphtile{gradient}{plus_2sd}
+% & \morphtile{red}{plus_2sd}
+% & \morphtile{green}{plus_2sd}
+% & \morphtile{blue}{plus_2sd}
+% \\
+% \end{tabular}
+
+% \caption{Controlled morphology and appearance interventions for a
+% representative H\&E tile. Each column changes one morphology or appearance
+% feature across five standardized dose levels while preserving the source
+% spatial map, non-target controls, and diffusion seed.}
+% \label{fig:morphology_grid}
+% \end{figure*}
+
+% \subsection{What the three tables establish}
+
+% FID and KID establish distributional similarity but cannot demonstrate condition use. Spatial correlations establish map adherence but can be inflated by an in-loop analyzer. The independent rows reduce that concern, and the random-real-tile row shows that realistic tissue alone is insufficient. Finally, within-image dose response demonstrates that the FiLM controls alter the requested measurement in an ordered manner. Together, the evaluations support using generated pairs as controlled perturbations while still requiring per-sample verification for downstream interpretation.

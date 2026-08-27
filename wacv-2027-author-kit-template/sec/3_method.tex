@@ -1,46 +1,204 @@
 \section{Method}
 \label{sec:method}
 
-\subsection{Conditional H\&E synthesis}
+\subsection{Framework overview}
+\label{sec:framework-overview}
 
-Let $S\in[0,1]^{5\times512\times512}$ denote a dense spatial condition and $m\in\mathbb{R}^{16}$ a standardized morphology/appearance condition. The spatial channels encode tumor, inflammatory, epithelial, connective/stromal, and necrotic compartments. The global vector stores paired summary statistics for nuclear size, perimeter, eccentricity, solidity, image gradient, and RGB appearance in the exact feature order used during training.
+CPathOGen is an interventional image-synthesis framework for examining how computational pathology models respond to controlled changes in H\&E input tiles. Figure~\ref{fig:probing_cartoon} presents the overall use case: a control is modified, CPathOGen generates a matched H\&E counterfactual, and the response of a frozen downstream model is recorded for model interpretation.
 
-A convolutional encoder downsamples the map to latent resolution,
+Figure~\ref{fig:overview} summarizes the construction of the conditional generator. During training, CellViT++ extracts weak cellular labels from real H\&E tiles. These labels are converted into a cellular spatial map and a global morphology/appearance vector, which condition a Stable Diffusion 2.1 latent-diffusion model through latent spatial conditioning and blockwise FiLM. At inference, the same condition format can be extracted from a real tile, manually modified, or constructed by the user.
+
+\subsection{Weakly supervised condition construction}
+\label{sec:weak-conditions}
+
+As illustrated on the left of Figure~\ref{fig:overview}, to construct conditions for generator training at scale, we use pretrained nucleus segmentation and cell-classification models. In our implementation, CellViT++ provides nucleus contours, centroids, and predicted cell types. These predictions are treated as weak labels rather than manual ground truth.
+
+Let an analyzer $\mathcal{A}$ applied to an H\&E tile $x$ produce
 \begin{equation}
-    c_s=E_s(S), \qquad c_s\in\mathbb{R}^{4\times64\times64}.
-    \label{eq:spatial_encoder}
+\mathcal{A}(x)
+=
+\left\{
+    (\mathbf{q}_n,y_n,\omega_n)
+\right\}_{n=1}^{N},
+\label{eq:nucleus-set}
 \end{equation}
-At diffusion step $t$, the encoded condition is concatenated with the four-channel noisy latent,
+where $N$ is the number of detected nuclei, $\mathbf{q}_n$ is the centroid of nucleus $n$, $y_n$ is its predicted cellular compartment, and $\omega_n$ is its instance contour.
+
+The spatial condition is represented by
+$S\in[0,1]^{K\times H\times W}$, where $K$ is the number of cellular compartments and $H$ and $W$ are the tile height and width. Each channel is constructed by rasterizing the centroids belonging to one cellular compartment:
 \begin{equation}
-    \widetilde z_t=[z_t;c_s]\in\mathbb{R}^{8\times64\times64}.
-    \label{eq:latent_concat}
+S_k(\mathbf{u})
+=
+\operatorname{Norm}
+\left[
+    \sum_{n:y_n=k}
+    \kappa(\mathbf{u}-\mathbf{q}_n)
+\right],
+\label{eq:spatial-map}
 \end{equation}
-The first U-Net convolution is expanded from four to eight input channels. Pretrained latent weights initialize the original channels; the new condition channels are zero-initialized so that optimization begins from the image prior and progressively learns spatial control.
+where $\mathbf{u}$ denotes a pixel location, $\kappa$ is a localized spatial kernel, and $\operatorname{Norm}$ scales the resulting channel to a common range. We use $K=5$ channels corresponding to tumor, inflammatory, epithelial, stromal, and necrotic compartments.
 
-\subsection{Morphology and appearance modulation}
-
-Each residual block receives a learned channel-wise affine transformation. For block $\ell$, a two-layer mapping produces scale and shift vectors,
+A global morphology and appearance condition
+$m\in\mathbb{R}^{d}$ is computed from the detected nucleus contours and corresponding image regions:
 \begin{equation}
- (\gamma_\ell,\beta_\ell)=f_\ell(m),\qquad
- h'_\ell=(1+\gamma_\ell)\odot h_\ell+\beta_\ell.
- \label{eq:film}
+m
+=
+\operatorname{Std}
+\left[
+    \Phi\bigl(x,\mathcal{A}(x)\bigr)
+\right],
+\label{eq:morph-vector}
 \end{equation}
-Blockwise FiLM allows geometry, texture, and stain summaries to influence the full denoising hierarchy instead of entering only at the bottleneck. Scale and shift are bounded to prevent unstable extrapolation. At inference, each control is restricted to the range represented by the frozen training preprocessing artifact.
+where $\Phi$ aggregates the mean and dispersion of nuclear size, perimeter, eccentricity, solidity, nuclear gradient, and RGB appearance statistics. The operator $\operatorname{Std}$ applies the feature-wise standardization used during model training. Our implementation uses $d=16$ features.
 
-\subsection{Condition preprocessing}
+The preprocessing parameters, feature ordering, and supported control ranges are stored with the model and reused during inference. This is particularly important for the appearance dimensions, for which incorrect standardization or feature ordering can produce globally inconsistent H\&E coloration.
 
-Preprocessing is part of the model rather than a user-interface convenience. Scaler fitting follows patient/slide splitting. The training artifact records feature names and order, center and scale, optional transforms, clipping thresholds, and a version identifier. The same artifact is used for training, validation, interactive generation, and batch experiments. This is especially important for RGB controls: a raw-versus-standardized mismatch or feature-order error can create globally incorrect stain even when spatial synthesis remains plausible.
+\subsection{Conditional latent-diffusion model}
+\label{sec:conditional-ldm}
 
-\subsection{Paired interventions}
+CPathOGen as shown in Figure~\ref{fig:overview} is built upon a latent diffusion model initialized from pretrained Stable Diffusion 2.1 weights. We first adapt the pretrained visual prior to H\&E tissue and subsequently introduce the structured spatial and morphology conditions.
 
-For source condition $c=(S,m)$ and noise $\epsilon$, a pair is
+Let $\mathcal{E}$ and $\mathcal{D}$ denote the encoder and decoder of the pretrained variational autoencoder. An H\&E tile $x$ is encoded as
 \begin{equation}
- x^- =G(S,m,\epsilon),\qquad
- x^+=G(\mathcal I_S(S),\mathcal I_m(m),\epsilon).
- \label{eq:counterfactual}
+z_0=\mathcal{E}(x),
 \end{equation}
-Only one intervention family is active unless an interaction is explicitly tested. Stain experiments hold spatial structure and geometry fixed. Morphology experiments sweep one feature while retaining color and space. Spatial experiments change composition, density, distance, or mixing while retaining morphology. Shared noise reduces stochastic variation, but recovered conditions are still measured rather than assumed.
+where $z_0$ is its lower-dimensional latent representation. At diffusion step $t$, Gaussian noise $\epsilon$ is added according to
+\begin{equation}
+z_t
+=
+\sqrt{\bar{\alpha}_t}\,z_0
++
+\sqrt{1-\bar{\alpha}_t}\,\epsilon,
+\qquad
+\epsilon\sim\mathcal{N}(0,I),
+\label{eq:forward-diffusion}
+\end{equation}
+where $\bar{\alpha}_t$ controls the amount of signal retained at step $t$.
 
-\subsection{Prediction-independent candidate selection}
+The conditional denoising U-Net $\epsilon_\theta$ predicts the added noise from the noisy latent, diffusion timestep, spatial condition, and morphology vector. It is optimized using
+\begin{equation}
+\mathcal{L}_{\mathrm{diff}}
+=
+\mathbb{E}_{x,t,\epsilon}
+\left[
+    \left\|
+        \epsilon-
+        \epsilon_\theta(z_t,t;S,m)
+    \right\|_2^2
+\right].
+\label{eq:diffusion-loss}
+\end{equation}
+The text condition is held fixed because synthesis is governed by the structured pathology controls rather than natural-language prompts.
 
-For each requested condition, eight random seeds produce a fixed candidate set. \cellvit{} is applied to each candidate and its nuclei are compared with the input map. A detected nucleus receives positive credit when a same-type requested nucleus lies within 50 pixels, zero credit for a nearby different type, and a penalty when no requested nucleus is nearby. The highest-scoring candidate is selected. Ties are resolved deterministically. Because selection can improve reported realism at the cost of coverage and compute, Table~\ref{tab:realism} reports both the unfiltered and selected distributions.
+\subsection{Latent spatial conditioning}
+\label{sec:spatial-conditioning}
+
+The spatial condition is introduced through a trainable convolutional encoder
+$E_s$. Given the cellular map
+$S\in[0,1]^{K\times H\times W}$, the encoder produces
+\begin{equation}
+c_s=E_s(S),
+\qquad
+c_s\in\mathbb{R}^{C_s\times h\times w},
+\label{eq:spatial-encoder}
+\end{equation}
+where $C_s$ is the number of spatial feature channels and $h\times w$ is the spatial resolution of the diffusion latent. In our implementation,
+$H=W=512$, $h=w=64$, and $C_s=4$.
+
+Let
+$z_t\in\mathbb{R}^{C_z\times h\times w}$ denote the noisy image latent at diffusion step $t$, with $C_z=4$. The encoded spatial features are concatenated with the noisy latent:
+\begin{equation}
+\widetilde{z}_t
+=
+\left[
+    z_t;\lambda_s c_s
+\right]
+\in
+\mathbb{R}^{(C_z+C_s)\times h\times w},
+\label{eq:latent-concatenation}
+\end{equation}
+where $[\cdot;\cdot]$ denotes channel-wise concatenation and $\lambda_s$ controls the strength of spatial conditioning. The resulting tensor contains eight channels in our implementation.
+
+The first U-Net convolution is expanded from four to eight input channels. The weights associated with the original latent channels retain their pretrained initialization, while the additional spatial-input weights are initialized to zero. The model can therefore begin from the pretrained H\&E image prior and progressively learn how cell type, abundance, and location should affect synthesis.
+
+\subsection{Morphology and Stain modulation}
+\label{sec:film-conditioning}
+
+The global condition $m$ is injected throughout the denoising U-Net using feature-wise linear modulation. Let
+\[
+h_\ell
+\in
+\mathbb{R}^{B\times C_\ell\times h_\ell\times w_\ell}
+\]
+denote the output activation of residual block $\ell$, where $B$ is the batch size, $C_\ell$ is the number of channels, and $h_\ell\times w_\ell$ is the spatial resolution at that block.
+
+Each residual block has a learned two-layer mapping
+\[
+f_\ell:\mathbb{R}^{d}\rightarrow\mathbb{R}^{2C_\ell},
+\]
+which transforms the morphology vector into channel-wise scale and shift parameters:
+\begin{equation}
+(\gamma_\ell,\beta_\ell)=f_\ell(m).
+\label{eq:film-parameters}
+\end{equation}
+Here,
+$\gamma_\ell,\beta_\ell\in\mathbb{R}^{B\times C_\ell}$ are broadcast over the spatial dimensions of $h_\ell$. The modulated activation is
+\begin{equation}
+h'_\ell
+=
+(1+\gamma_\ell)\odot h_\ell+\beta_\ell,
+\label{eq:film}
+\end{equation}
+where $\odot$ denotes channel-wise multiplication. The identity offset in $1+\gamma_\ell$ preserves the unmodulated block when the predicted scale is zero.
+
+Applying FiLM across the U-Net residual blocks allows nuclear geometry, texture, and appearance to influence multiple levels of the denoising hierarchy. The scale and shift parameters are bounded to prevent extreme conditioning values from overwhelming the learned image representation. The spatial map and morphology vector consequently provide complementary controls: $S$ determines where cellular structures should occur, while $m$ controls their aggregate geometry and appearance.
+
+\subsection{Prediction-independent fidelity guidance}
+\label{sec:fidelity-guidance}
+
+Different diffusion seeds can vary in how faithfully they express the requested cellular arrangement. For each condition, we therefore generate a fixed set of candidate images and rank them according to agreement between the requested spatial map and the cellular organization recovered from each generated image.
+
+Let $\mathcal{R}$ denote the candidate seed set and
+\[
+x_r=G_\theta(S,m,\epsilon_r)
+\]
+the image generated using seed $r\in\mathcal{R}$. A cellular analyzer is applied to $x_r$, and a fidelity function $Q(x_r,S)$ measures agreement between requested and recovered cell types and locations. The selected seed is
+\begin{equation}
+r^\star
+=
+\arg\max_{r\in\mathcal{R}}
+Q(x_r,S).
+\label{eq:candidate-selection}
+\end{equation}
+CellViT++ supplies the primary agreement signal in our implementation. The fidelity function and candidate set are fixed before downstream evaluation, and selection does not observe the predictions, representations, or gradients of the model being probed. The selected image is then used for the corresponding counterfactual analysis.
+
+\subsection{Paired interventions and model probing}
+\label{sec:paired-interventions}
+
+At inference, users may edit an extracted condition or directly construct a custom spatial map and morphology vector. Let
+$c=(S,m)$ denote a baseline condition and
+$\mathcal{I}_{j,\delta}$ an intervention of magnitude $\delta$ applied to control family $j$. A matched image pair is generated as
+\begin{equation}
+x^{(0)}
+=
+G_\theta(S,m,\epsilon),
+\qquad
+x^{(j,\delta)}
+=
+G_\theta\left(
+    \mathcal{I}_{j,\delta}(S,m),
+    \epsilon
+\right),
+\label{eq:counterfactual-pair}
+\end{equation}
+where $G_\theta$ includes latent denoising and image decoding. Both images reuse the same initial noise $\epsilon$, and all non-target conditioning variables remain fixed.
+
+For example, morphology interventions vary one nuclear property while preserving spatial organization and appearance. Spatial interventions modify cell composition, density, distance, or mixing while preserving the global morphology vector. Appearance interventions modify the selected color controls while preserving spatial and geometric conditions. Reusing the same noise reduces unrelated stochastic variation, although the requested intervention is subsequently verified from the generated image.
+
+Given a frozen downstream model $F$, its responses are
+\begin{equation}
+o^{(0)}=F(x^{(0)}),
+\qquad
+o^{(j,\delta)}=F(x^{(j,\delta)}),
+\label{eq:probe-output}
+\end{equation}

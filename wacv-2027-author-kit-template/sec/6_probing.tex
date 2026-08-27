@@ -1,124 +1,124 @@
-\section{Counterfactual Model Probing}
-\label{sec:probing}
+% \section{Counterfactual Model Probing}
+% \label{sec:probing}
 
-The fidelity results enable a compact downstream protocol. This section specifies the endpoints without inserting unmeasured projected values into the reviewer manuscript. Table~\ref{tab:xai_all_tasks} reserves the paired model-sensitivity and explanation-faithfulness results.
+% The fidelity results enable a compact downstream protocol. This section specifies the endpoints without inserting unmeasured projected values into the reviewer manuscript. Tables~\ref{tab:model_interpretability} and~\ref{tab:aopc} reserve the paired model-sensitivity and explanation-faithfulness results.
 
-\begin{table*}[t]
-\centering
-\caption{Model performance and interpretability intervention results across tasks.
-Intervention values are reported as TVD / Flip Rate.}
-\label{tab:xai_all_tasks}
+% \begin{table*}[t]
+% \centering
+% \caption{Model performance and interpretability intervention results across tasks.
+% Intervention values are reported as TVD / Flip Rate.}
+% \label{tab:xai_all_tasks}
 
-\small
-\renewcommand{\arraystretch}{1.30}
-\setlength{\tabcolsep}{4.5pt}
+% \small
+% \renewcommand{\arraystretch}{1.30}
+% \setlength{\tabcolsep}{4.5pt}
 
-\begin{adjustbox}{max width=\textwidth}
-\begin{tabular}{lccccccc}
-\toprule
+% \begin{adjustbox}{max width=\textwidth}
+% \begin{tabular}{lccccccc}
+% \toprule
 
-\textbf{Model} &
-\textbf{Performance} &
-\shortstack{\textbf{Stain}\\\textbf{Brightness}} &
-\shortstack{\textbf{Nuclear}\\\textbf{Enlargement}} &
-\shortstack{\textbf{Nuclear Shape}\\\textbf{Irregularity}} &
-\shortstack{\textbf{Immune}\\\textbf{Burden}} &
-\shortstack{\textbf{Tumor-Immune}\\\textbf{Mixing}} &
-\textbf{BNR} \\
+% \textbf{Model} &
+% \textbf{Performance} &
+% \shortstack{\textbf{Stain}\\\textbf{Brightness}} &
+% \shortstack{\textbf{Nuclear}\\\textbf{Enlargement}} &
+% \shortstack{\textbf{Nuclear Shape}\\\textbf{Irregularity}} &
+% \shortstack{\textbf{Immune}\\\textbf{Burden}} &
+% \shortstack{\textbf{Tumor-Immune}\\\textbf{Mixing}} &
+% \textbf{BNR} \\
 
-\midrule
+% \midrule
 
-\multicolumn{8}{l}{\textbf{PAM50 Classification} \hfill \textit{Performance metric: AUC}} \\
-\midrule
+% \multicolumn{8}{l}{\textbf{PAM50 Classification} \hfill \textit{Performance metric: AUC}} \\
+% \midrule
 
-ResNet-50
-& 0.7627
-& 0.0243 / 0.0238
-& 0.0257 / 0.0281
-& 0.0270 / 0.0241
-& 0.0442 / 0.0626
-& 0.0275 / 0.0267
-& 1.2776 \\
+% ResNet-50
+% & 0.7627
+% & 0.0243 / 0.0238
+% & 0.0257 / 0.0281
+% & 0.0270 / 0.0241
+% & 0.0442 / 0.0626
+% & 0.0275 / 0.0267
+% & 1.2776 \\
 
-CTransPath
-& 0.8143
-& 0.0104 / 0.0158
-& 0.0093 / 0.0081
-& 0.0094 / 0.0030
-& 0.0152 / 0.0189
-& 0.0105 / 0.0075
-& 1.0694 \\
+% CTransPath
+% & 0.8143
+% & 0.0104 / 0.0158
+% & 0.0093 / 0.0081
+% & 0.0094 / 0.0030
+% & 0.0152 / 0.0189
+% & 0.0105 / 0.0075
+% & 1.0694 \\
 
-UNI2-h
-& 0.8713
-& 0.0060 / 0.0094
-& 0.0066 / 0.0115
-& 0.0065 / 0.0073
-& 0.0107 / 0.0137
-& 0.0065 / 0.0065
-& 1.2680 \\
+% UNI2-h
+% & 0.8713
+% & 0.0060 / 0.0094
+% & 0.0066 / 0.0115
+% & 0.0065 / 0.0073
+% & 0.0107 / 0.0137
+% & 0.0065 / 0.0065
+% & 1.2680 \\
 
-\midrule
+% \midrule
 
-\multicolumn{8}{l}{\textbf{Overall Survival} \hfill \textit{Performance metric: C-index}} \\
-\midrule
+% \multicolumn{8}{l}{\textbf{Overall Survival} \hfill \textit{Performance metric: C-index}} \\
+% \midrule
 
-ResNet-50
-& 0.5445
-& 0.0026 / 0.0024
-& 0.0025 / 0.0017
-& 0.0033 / 0.0003
-& 0.0039 / 0.0000
-& 0.0029 / 0.0005
-& 1.1893 \\
+% ResNet-50
+% & 0.5445
+% & 0.0026 / 0.0024
+% & 0.0025 / 0.0017
+% & 0.0033 / 0.0003
+% & 0.0039 / 0.0000
+% & 0.0029 / 0.0005
+% & 1.1893 \\
 
-CTransPath
-& 0.6216
-& 0.0017 / 0.0014
-& 0.0017 / 0.0017
-& 0.0018 / 0.0000
-& 0.0026 / 0.0005
-& 0.0015 / 0.0010
-& 1.1398 \\
+% CTransPath
+% & 0.6216
+% & 0.0017 / 0.0014
+% & 0.0017 / 0.0017
+% & 0.0018 / 0.0000
+% & 0.0026 / 0.0005
+% & 0.0015 / 0.0010
+% & 1.1398 \\
 
-UNI2-h
-& 0.6209
-& 0.0014 / 0.0021
-& 0.0015 / 0.0021
-& 0.0014 / 0.0010
-& 0.0023 / 0.0021
-& 0.0014 / 0.0003
-& 1.1711 \\
+% UNI2-h
+% & 0.6209
+% & 0.0014 / 0.0021
+% & 0.0015 / 0.0021
+% & 0.0014 / 0.0010
+% & 0.0023 / 0.0021
+% & 0.0014 / 0.0003
+% & 1.1711 \\
 
-PathLUPI + CONCH
-& 0.5860
-& 0.0043 / 0.0057
-& 0.0049 / 0.0032
-& 0.0043 / 0.0043
-& 0.0207 / 0.0207
-& 0.0036 / 0.0043
-& 1.9488 \\
+% PathLUPI + CONCH
+% & 0.5860
+% & 0.0043 / 0.0057
+% & 0.0049 / 0.0032
+% & 0.0043 / 0.0043
+% & 0.0207 / 0.0207
+% & 0.0036 / 0.0043
+% & 1.9488 \\
 
-\bottomrule
-\end{tabular}
-\end{adjustbox}
+% \bottomrule
+% \end{tabular}
+% \end{adjustbox}
 
-\end{table*}
+% \end{table*}
 
-\subsection{Stain invariance}
+% \subsection{Stain invariance}
 
-Red, green, and blue controls are swept within their supported ranges while spatial structure, nuclear geometry, and noise remain fixed. RGB interventions are complemented by optical-density measurements because raw channels mix stain concentration with acquisition and tissue composition. For a representation encoder, sensitivity is the normalized embedding displacement per recovered color change. For a task model, it is the change in logit, probability, or risk. A robust model need not be completely color-invariant---hematoxylin changes real nuclear contrast---but nuisance response should be reported relative to verified morphology and spatial response.
+% Red, green, and blue controls are swept within their supported ranges while spatial structure, nuclear geometry, and noise remain fixed. RGB interventions are complemented by optical-density measurements because raw channels mix stain concentration with acquisition and tissue composition. For a representation encoder, sensitivity is the normalized embedding displacement per recovered color change. For a task model, it is the change in logit, probability, or risk. A robust model need not be completely color-invariant---hematoxylin changes real nuclear contrast---but nuisance response should be reported relative to verified morphology and spatial response.
 
-\subsection{Morphology sensitivity}
+% \subsection{Morphology sensitivity}
 
-Nuclear size, eccentricity, and solidity are swept independently. An intervention enters analysis only when the recovered feature is ordered correctly and non-target controls remain within frozen tolerances. Across-image correlations answer whether natural condition variation is preserved; same-image dose curves answer whether the model responds to a targeted change. We report standardized response, monotonicity, and a signal-to-seed-variation ratio. Using the same cases, doses, and seeds for each model makes the comparison paired.
+% Nuclear size, eccentricity, and solidity are swept independently. An intervention enters analysis only when the recovered feature is ordered correctly and non-target controls remain within frozen tolerances. Across-image correlations answer whether natural condition variation is preserved; same-image dose curves answer whether the model responds to a targeted change. We report standardized response, monotonicity, and a signal-to-seed-variation ratio. Using the same cases, doses, and seeds for each model makes the comparison paired.
 
-\subsection{Spatial sensitivity}
+% \subsection{Spatial sensitivity}
 
-Spatial maps vary immune density, tumor--immune distance, mixing, clustering, and exclusion while holding morphology and stain fixed. Patch encoders are evaluated by representation movement and linear recovery of intervention magnitude. End-to-end breast models are evaluated at their native output: subtype probability for patch classifiers, slide score for multiple-instance models, and risk for survival systems. Patch interventions are propagated through the same sampling and aggregation process used by the downstream model.
+% Spatial maps vary immune density, tumor--immune distance, mixing, clustering, and exclusion while holding morphology and stain fixed. Patch encoders are evaluated by representation movement and linear recovery of intervention magnitude. End-to-end breast models are evaluated at their native output: subtype probability for patch classifiers, slide score for multiple-instance models, and risk for survival systems. Patch interventions are propagated through the same sampling and aggregation process used by the downstream model.
 
-\subsection{Explanation faithfulness}
+% \subsection{Explanation faithfulness}
 
-Given a saliency or attention method, regions or cellular concepts are ranked for each source. \method{} applies a matched intervention to top-ranked, random, and bottom-ranked concepts under the same area and magnitude budget. Faithfulness is supported when top-ranked edits produce larger target-output changes than random and bottom-ranked edits, after conditioning on recovered fidelity. This is a model-causal test under the generator; it is not evidence of biological or treatment causality.
+% Given a saliency or attention method, regions or cellular concepts are ranked for each source. \method{} applies a matched intervention to top-ranked, random, and bottom-ranked concepts under the same area and magnitude budget. Faithfulness is supported when top-ranked edits produce larger target-output changes than random and bottom-ranked edits, after conditioning on recovered fidelity. This is a model-causal test under the generator; it is not evidence of biological or treatment causality.
 
-The evaluated panel should distinguish general-purpose encoders (ResNet50, CTransPath, CONCH, UNI2-h, and Virchow) from task-trained breast pathology models. Reporting embedding movement as though it were a clinical prediction would otherwise conflate representation sensitivity with downstream decision behavior.
+% The evaluated panel should distinguish general-purpose encoders (ResNet50, CTransPath, CONCH, UNI2-h, and Virchow) from task-trained breast pathology models. Reporting embedding movement as though it were a clinical prediction would otherwise conflate representation sensitivity with downstream decision behavior.
