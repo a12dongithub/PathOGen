@@ -51,7 +51,9 @@ endpoints = [
     "timm_ctp==0.5.4",
     "torch>=2.2,<3",
     "torchvision>=0.17,<1",
+    "tokenizers==0.19.1",
     "tqdm>=4.65",
+    "transformers==4.44.2",
 ]
 cloud = [
     "google-cloud-storage>=2,<4",
