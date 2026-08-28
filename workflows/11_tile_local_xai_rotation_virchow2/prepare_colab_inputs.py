@@ -176,8 +176,13 @@ def main() -> None:
     search_roots = unique_paths([cvpr, mydrive])
 
     dataset_unpack = work / "dataset_unpack"
-    dataset_root = locate_dataset_root(dataset_unpack)
+    dataset_complete = dataset_unpack / ".extraction_complete"
+    dataset_root = (
+        locate_dataset_root(dataset_unpack) if dataset_complete.is_file() else None
+    )
     if dataset_root is None:
+        if dataset_unpack.exists():
+            shutil.rmtree(dataset_unpack)
         dataset_archives = []
         exact = cvpr / "512_final_dataset.zip"
         if exact.is_file():
@@ -189,13 +194,21 @@ def main() -> None:
         if not dataset_archives:
             raise FileNotFoundError("Could not find 512_final_dataset.zip")
         extract_archives([dataset_archives[0]], dataset_unpack)
+        dataset_complete.write_text("complete\n", encoding="utf-8")
         dataset_root = locate_dataset_root(dataset_unpack)
     if dataset_root is None:
         raise FileNotFoundError("Could not locate the extracted 512_final_dataset")
 
     counterfactual_unpack = work / "counterfactual_unpack"
-    counterfactual_root = locate_counterfactual_root(counterfactual_unpack)
+    counterfactual_complete = counterfactual_unpack / ".extraction_complete"
+    counterfactual_root = (
+        locate_counterfactual_root(counterfactual_unpack)
+        if counterfactual_complete.is_file()
+        else None
+    )
     if counterfactual_root is None:
+        if counterfactual_unpack.exists():
+            shutil.rmtree(counterfactual_unpack)
         archives: list[Path] = []
         for root in search_roots:
             archives.extend(root.rglob("CPathOGen_Counterfactuals*.zip"))
@@ -206,6 +219,7 @@ def main() -> None:
                 f"{[str(path) for path in archives]}"
             )
         extract_archives(archives, counterfactual_unpack)
+        counterfactual_complete.write_text("complete\n", encoding="utf-8")
         counterfactual_root = locate_counterfactual_root(counterfactual_unpack)
     if counterfactual_root is None:
         raise FileNotFoundError("Could not locate the consolidated counterfactual folder")
