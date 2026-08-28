@@ -32,7 +32,6 @@ Virchow2.
 ```python
 from google.colab import drive, userdata
 from pathlib import Path
-from huggingface_hub import snapshot_download
 import json
 import os
 import shutil
@@ -69,6 +68,8 @@ else:
 
 !pip install -q -e "{REPO}[endpoints]" hf_xet
 !pip install -q git+https://github.com/Mahmoodlab/CONCH.git
+
+from huggingface_hub import snapshot_download
 
 PATHLUPI_ROOT = Path("/content/external/PathLUPI")
 if not (PATHLUPI_ROOT / ".git").is_dir():
