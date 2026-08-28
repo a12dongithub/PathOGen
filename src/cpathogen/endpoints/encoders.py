@@ -36,8 +36,6 @@ def choose_device(requested: str) -> torch.device:
 
 def _prepare_model(model: nn.Module, device: torch.device) -> nn.Module:
     model.eval().requires_grad_(False).to(device)
-    if device.type == "cuda":
-        model.half()
     return model
 
 
@@ -229,7 +227,11 @@ class TileDataset(Dataset):
         elif code == 2:
             image = ImageOps.flip(image)
         elif code == 3:
-            image = image.rotate(180)
+            image = image.transpose(Image.Transpose.ROTATE_180)
+        elif code == 4:
+            image = image.transpose(Image.Transpose.ROTATE_90)
+        elif code == 5:
+            image = image.transpose(Image.Transpose.ROTATE_270)
         elif code != 0:
             raise ValueError(f"Unknown deterministic augmentation code: {code}")
         return self.transform(image)
@@ -239,11 +241,16 @@ def _forward_with_oom_split(
     bundle: EncoderBundle, images: torch.Tensor, device: torch.device
 ) -> torch.Tensor:
     try:
-        try:
-            dtype = next(bundle.model.parameters()).dtype
-        except StopIteration:
-            dtype = images.dtype
-        return bundle.forward(images.to(device=device, dtype=dtype, non_blocking=True))
+        prepared = images.to(device=device, dtype=torch.float32, non_blocking=True)
+        with torch.autocast(
+            device_type=device.type,
+            dtype=torch.float16,
+            enabled=(
+                device.type == "cuda"
+                and bundle.name not in {"debug_rgb", "resnet50", "resnet50_clam"}
+            ),
+        ):
+            return bundle.forward(prepared)
     except torch.OutOfMemoryError:
         if len(images) == 1:
             raise

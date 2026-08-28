@@ -50,7 +50,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--paper-five-only",
         action="store_true",
-        help="Embed only the reference/target images used by the five paper columns.",
+        help=(
+            "Embed only the reference/target images used by the paper "
+            "intervention columns (legacy option name retained)."
+        ),
     )
     return parser.parse_args()
 
@@ -83,6 +86,11 @@ def _variant_features(
             batch_size=args.batch_size,
             num_workers=args.num_workers,
             description=f"{encoder_name} counterfactuals",
+            augmentation_codes=(
+                variants["augmentation_code"].fillna(0).astype(int).tolist()
+                if "augmentation_code" in variants
+                else None
+            ),
         )
     finally:
         release_encoder(bundle)

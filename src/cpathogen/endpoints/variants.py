@@ -61,7 +61,8 @@ def normalize_variant_manifests(paths: list[Path]) -> pd.DataFrame:
             raise ValueError(f"{manifest_path} lacks {sorted(required - set(frame))}")
         for _, row in frame.iterrows():
             image_path = _resolve_path(row, manifest_path)
-            canonical = str(image_path).lower()
+            augmentation_code = int(row.get("augmentation_code", 0))
+            canonical = f"{str(image_path).lower()}::augmentation={augmentation_code}"
             if canonical in seen:
                 continue
             seen.add(canonical)
@@ -83,6 +84,7 @@ def normalize_variant_manifests(paths: list[Path]) -> pd.DataFrame:
                     "condition": condition,
                     "dose_sd": _dose(condition),
                     "seed": row.get("seed", pd.NA),
+                    "augmentation_code": augmentation_code,
                     "image_path": str(image_path),
                     "source_manifest": str(manifest_path),
                 }

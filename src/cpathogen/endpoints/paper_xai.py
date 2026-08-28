@@ -1,4 +1,4 @@
-"""Paper-facing XAI metrics for the five CPathOGen interventions."""
+"""Paper-facing XAI metrics for the CPathOGen interventions."""
 
 from __future__ import annotations
 
@@ -15,6 +15,7 @@ PAPER_COLUMNS = (
     "Model",
     "Performance",
     "Stain Brightness",
+    "Image Rotation",
     "Nuclear Enlargement",
     "Nuclear Shape Irregularity",
     "Immune Burden",
@@ -29,6 +30,7 @@ class PaperExperiment:
     table_column: str
     reference_condition: str
     target_conditions: tuple[str, ...]
+    family: str
 
     @property
     def retained_conditions(self) -> frozenset[str]:
@@ -41,36 +43,50 @@ PAPER_EXPERIMENTS = (
         "Stain Brightness",
         "baseline",
         (
-            "stain_brightness_plus_0p5sd",
+            "stain_brightness_minus_2p0sd",
+            "stain_brightness_minus_1p0sd",
             "stain_brightness_plus_1p0sd",
-            "stain_brightness_plus_1p5sd",
+            "stain_brightness_plus_2p0sd",
         ),
+        "nuisance",
+    ),
+    PaperExperiment(
+        "image_rotation",
+        "Image Rotation",
+        "rotation_0",
+        ("rotation_90", "rotation_180", "rotation_270"),
+        "nuisance",
     ),
     PaperExperiment(
         "nuclear_enlargement",
         "Nuclear Enlargement",
         "baseline",
         (
-            "nuclear_enlargement_plus_0p5sd",
+            "nuclear_enlargement_minus_2p0sd",
+            "nuclear_enlargement_minus_1p0sd",
             "nuclear_enlargement_plus_1p0sd",
-            "nuclear_enlargement_plus_1p5sd",
+            "nuclear_enlargement_plus_2p0sd",
         ),
+        "biological",
     ),
     PaperExperiment(
         "nuclear_shape_irregularity",
         "Nuclear Shape Irregularity",
         "baseline",
         (
-            "nuclear_shape_irregularity_plus_0p5sd",
+            "nuclear_shape_irregularity_minus_2p0sd",
+            "nuclear_shape_irregularity_minus_1p0sd",
             "nuclear_shape_irregularity_plus_1p0sd",
-            "nuclear_shape_irregularity_plus_1p5sd",
+            "nuclear_shape_irregularity_plus_2p0sd",
         ),
+        "biological",
     ),
     PaperExperiment(
         "peritumoral_immune_ring_diameter40px",
         "Immune Burden",
         "peritumoral_ring_plus_80",
         ("peritumoral_ring_plus_160", "peritumoral_ring_plus_320"),
+        "biological",
     ),
     PaperExperiment(
         "tumor_immune_separation_diameter40px",
@@ -82,12 +98,13 @@ PAPER_EXPERIMENTS = (
             "tumor_immune_high_separation",
             "tumor_immune_maximal_segregation",
         ),
+        "biological",
     ),
 )
 
 
 def filter_paper_variants(frame: pd.DataFrame) -> pd.DataFrame:
-    """Retain only images that contribute to the five paper-table columns."""
+    """Retain only images that contribute to the paper-table columns."""
     required = {"experiment", "condition"}
     if not required.issubset(frame):
         raise ValueError(f"Variant frame lacks {sorted(required - set(frame))}")
@@ -221,19 +238,28 @@ def build_paper_rows(model_dir: Path) -> dict[str, dict[str, str]]:
             spec.table_column: _experiment_metric(frame, endpoint, spec)
             for spec in PAPER_EXPERIMENTS
         }
-        stain_tvd = raw_metrics["Stain Brightness"][0]
-        biological_tvd = float(
+        nuisance_tvd = float(
             np.mean(
                 [
-                    raw_metrics["Nuclear Enlargement"][0],
-                    raw_metrics["Nuclear Shape Irregularity"][0],
-                    raw_metrics["Immune Burden"][0],
-                    raw_metrics["Tumor-Immune Mixing"][0],
+                    raw_metrics[spec.table_column][0]
+                    for spec in PAPER_EXPERIMENTS
+                    if spec.family == "nuisance"
                 ]
             )
         )
-        if stain_tvd <= 0:
-            raise ValueError(f"Cannot calculate BNR with stain TVD={stain_tvd}")
+        biological_tvd = float(
+            np.mean(
+                [
+                    raw_metrics[spec.table_column][0]
+                    for spec in PAPER_EXPERIMENTS
+                    if spec.family == "biological"
+                ]
+            )
+        )
+        if nuisance_tvd <= 0:
+            raise ValueError(
+                f"Cannot calculate BNR with nuisance TVD={nuisance_tvd}"
+            )
         row = {
             "Model": "Virchow2",
             "Performance": f"{_performance(model_dir, endpoint):.4f}",
@@ -241,6 +267,6 @@ def build_paper_rows(model_dir: Path) -> dict[str, dict[str, str]]:
         for spec in PAPER_EXPERIMENTS:
             tvd, flip = raw_metrics[spec.table_column]
             row[spec.table_column] = f"{tvd:.4f} / {flip:.4f}"
-        row["BNR"] = f"{biological_tvd / stain_tvd:.4f}"
+        row["BNR"] = f"{biological_tvd / nuisance_tvd:.4f}"
         rows[task] = {column: row[column] for column in PAPER_COLUMNS}
     return rows

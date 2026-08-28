@@ -25,6 +25,9 @@ recurrence time/event and no MammaPrint Low/High ground truth.
   The source patient's held-out head scores the resulting bag. JSONL stores the
   full prediction and its matched baseline, so later XAI metrics do not require
   rerunning a model.
+- Image rotation is an appearance-preserving nuisance intervention with the
+  original generated tile as reference and exact 90, 180, and 270 degree
+  rotations as targets. Rotation is applied on the fly without resampling.
 
 ## Released models
 
@@ -71,8 +74,8 @@ predictions.
 Virchow2 can be run independently after its Hugging Face license has been
 accepted. Use `--encoders virchow2` for both foundation-model commands. Add
 `--paper-five-only` while scoring variants to retain only the conditions used
-by the paper columns: stain brightness, nuclear enlargement, nuclear shape
-irregularity, immune burden, and tumor--immune mixing. This avoids embedding
+by the paper columns: stain brightness, image rotation, nuclear enlargement,
+nuclear shape irregularity, immune burden, and tumor--immune mixing. This avoids embedding
 unused signed-dose images.
 
 After scoring, export the two insertion-ready rows with:
@@ -87,7 +90,18 @@ writes separate one-row CSV files and a LaTeX fragment under
 `models/virchow2/paper_table/`. Performance is macro one-vs-rest AUC for PAM50
 and C-index for survival. Intervention cells are `TVD / prediction-flip rate`,
 and BNR uses the mean TVD of the four biological interventions divided by the
-stain-brightness TVD, matching the existing table.
+mean TVD of stain brightness and image rotation. Each experiment receives equal
+weight regardless of how many target levels it contains.
+
+Create the rotation manifest before scoring variants:
+
+```bash
+python workflows/10_train_evaluate_endpoint_models/prepare_rotation_nuisance.py \
+  --counterfactual-root /path/to/CPathOGen_Counterfactuals \
+  --tile-manifest /path/to/endpoint_models/tile_manifest.csv \
+  --output-dir /path/to/CPathOGen_Counterfactuals/image_rotation \
+  --num-images 1000
+```
 
 ## Access requirements
 

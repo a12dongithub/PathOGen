@@ -68,7 +68,7 @@ def test_filter_and_export_virchow2_paper_rows(tmp_path: Path) -> None:
     variant_rows.append(
         {
             "experiment": "nuclear_enlargement",
-            "condition": "nuclear_enlargement_minus_2p0sd",
+            "condition": "nuclear_enlargement_plus_0p5sd",
             "source_tile_id": "tile_001",
         }
     )
