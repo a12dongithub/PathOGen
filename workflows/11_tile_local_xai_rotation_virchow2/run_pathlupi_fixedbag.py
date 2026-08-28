@@ -33,6 +33,8 @@ from run_local_xai_rerun import (
 
 MODEL_ID = "pathlupi_conch"
 DISPLAY_NAME = DISPLAY_MODELS[MODEL_ID]
+SURVIVAL_BIN_INDEX = 2
+SURVIVAL_INTERVAL_MONTHS = (42.4, 78.9)
 
 
 def parse_args() -> argparse.Namespace:
@@ -111,7 +113,15 @@ def predict_one(model: torch.nn.Module, bag: torch.Tensor) -> tuple[float, float
     with torch.inference_mode():
         outputs = model(x_path=bag)
     survival = outputs[1][0]
-    return float(-survival.sum().item()), float(survival[-1].item())
+    if survival.numel() <= SURVIVAL_BIN_INDEX:
+        raise ValueError(
+            f"PathLUPI returned {survival.numel()} survival bins; "
+            f"bin {SURVIVAL_BIN_INDEX} is required"
+        )
+    return (
+        float(-survival.sum().item()),
+        float(survival[SURVIVAL_BIN_INDEX].item()),
+    )
 
 
 def ordered_scoring_bag(
@@ -176,7 +186,7 @@ def evaluate_fold(
                     "official_fold": fold,
                     "bag_size": bag_size,
                     "risk_score": risk,
-                    "last_bin_survival_probability": probability,
+                    "survival_probability_42p4_78p9m_bin": probability,
                     "survival_time_days": float(record.survival_time_days),
                     "survival_event": int(record.survival_event),
                 }
@@ -375,6 +385,9 @@ def main() -> None:
     )
     audit = {
         "protocol": "released PathLUPI BRCA fold with one counterfactual in a deterministic fixed-size bag",
+        "survival_probability_bin_index": SURVIVAL_BIN_INDEX,
+        "survival_probability_interval_months": list(SURVIVAL_INTERVAL_MONTHS),
+        "survival_probability_interpretation": "cumulative survival through the discrete interval containing 60 months",
         "bag_size": args.bag_size,
         "device": str(device),
         "cache_baseline_shape": list(tile_values.shape),
@@ -397,5 +410,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
 

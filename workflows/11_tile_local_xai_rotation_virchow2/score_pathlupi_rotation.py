@@ -13,6 +13,8 @@ import torch
 from run_local_xai_rerun import bernoulli_vectors, summarize_experiments
 from run_pathlupi_fixedbag import (
     MODEL_ID,
+    SURVIVAL_BIN_INDEX,
+    SURVIVAL_INTERVAL_MONTHS,
     evaluate_fold,
     load_model,
     official_fold_map,
@@ -135,6 +137,8 @@ def main() -> None:
         "complete_panels": int(summary.iloc[0].tiles),
         "patients": int(summary.iloc[0].patients),
         "bag_size": args.bag_size,
+        "survival_probability_bin_index": SURVIVAL_BIN_INDEX,
+        "survival_probability_interval_months": list(SURVIVAL_INTERVAL_MONTHS),
     }
     (output / "pathlupi_rotation_audit.json").write_text(
         json.dumps(audit, indent=2), encoding="utf-8"
@@ -144,5 +148,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
 

@@ -4,6 +4,10 @@ Run the workflow in two stages. Stage 1 reports rotation for ResNet-50,
 CTransPath, UNI2-h, and PathLUPI+CONCH without extracting the real-image
 dataset. Stage 2 adds Virchow2 and emits the complete table.
 
+For PathLUPI, TVD and flip rate use cumulative survival from bin index 2, the
+released BRCA interval spanning 42.4--78.9 months and containing five years.
+Its official risk score remains unchanged for C-index calculation.
+
 The counterfactuals are read from the already-extracted directory
 `MyDrive/PTRI/CVPR/CPathOGen_Counterfactuals`. Both stages save resumable
 artifacts under `MyDrive/PTRI/CVPR/CPathOGen_A100_Rotation_Virchow2`.
