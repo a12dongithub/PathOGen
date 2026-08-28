@@ -79,3 +79,56 @@ def test_prepare_colab_inputs_discovers_and_stages(tmp_path: Path, monkeypatch) 
     assert Path(resolved["counterfactual_root"]).name == "CPathOGen_Counterfactuals"
     assert Path(resolved["endpoint_root"]) == output / "endpoint_models"
     assert module.valid_endpoint_root(output / "endpoint_models")
+
+
+def test_prepare_colab_inputs_uses_extracted_counterfactuals_without_dataset(
+    tmp_path: Path, monkeypatch
+) -> None:
+    module = load_script()
+    mydrive = tmp_path / "MyDrive"
+    cvpr = mydrive / "PTRI" / "CVPR"
+    counterfactuals = cvpr / "CPathOGen_Counterfactuals"
+    (counterfactuals / "nuclear_enlargement").mkdir(parents=True)
+    (counterfactuals / "stain_brightness").mkdir()
+    (counterfactuals / "organized_bucket_images.csv").write_text(
+        "fixture", encoding="utf-8"
+    )
+
+    endpoint = cvpr / "PathOGenResults" / "endpoint_models"
+    (endpoint / "embedding_cache").mkdir(parents=True)
+    for name in module.REQUIRED_ENDPOINT_FILES:
+        (endpoint / name).write_text("fixture", encoding="utf-8")
+    for name in module.REQUIRED_CACHES:
+        (endpoint / "embedding_cache" / name).write_bytes(b"fixture")
+    (endpoint / "models" / "resnet50").mkdir(parents=True)
+    for name in module.REQUIRED_FOLD_FILES:
+        (endpoint / "models" / "resnet50" / name).write_text(
+            "fixture", encoding="utf-8"
+        )
+
+    output = cvpr / "output"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            str(SCRIPT),
+            "--mydrive-root",
+            str(mydrive),
+            "--cvpr-root",
+            str(cvpr),
+            "--work-root",
+            str(tmp_path / "work"),
+            "--output-root",
+            str(output),
+            "--counterfactual-source",
+            str(counterfactuals),
+            "--skip-dataset",
+        ],
+    )
+    module.main()
+
+    resolved = json.loads((output / "resolved_paths.json").read_text())
+    assert resolved["dataset_root"] is None
+    assert resolved["real_images_dir"] is None
+    assert Path(resolved["counterfactual_root"]) == counterfactuals
+    assert module.valid_endpoint_root(output / "endpoint_models")

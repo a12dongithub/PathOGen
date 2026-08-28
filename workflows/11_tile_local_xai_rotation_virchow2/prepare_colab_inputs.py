@@ -37,6 +37,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--work-root", type=Path, required=True)
     parser.add_argument("--output-root", type=Path, required=True)
     parser.add_argument("--endpoint-source", type=Path)
+    parser.add_argument(
+        "--counterfactual-source",
+        type=Path,
+        help="Already-extracted counterfactual directory or a ZIP archive.",
+    )
+    parser.add_argument(
+        "--skip-dataset",
+        action="store_true",
+        help="Do not locate or extract 512_final_dataset.zip.",
+    )
     return parser.parse_args()
 
 
@@ -60,6 +70,10 @@ def extract_archives(archives: list[Path], destination: Path) -> None:
 
 
 def locate_counterfactual_root(search_root: Path) -> Path | None:
+    if not search_root.is_dir():
+        return None
+    if valid_counterfactual_root(search_root):
+        return search_root
     manifests = sorted(search_root.rglob("organized_bucket_images.csv"))
     for manifest in manifests:
         parent = manifest.parent
@@ -68,6 +82,65 @@ def locate_counterfactual_root(search_root: Path) -> Path | None:
         ).is_dir():
             return parent
     return None
+
+
+def valid_counterfactual_root(path: Path) -> bool:
+    return (
+        (path / "organized_bucket_images.csv").is_file()
+        and (path / "nuclear_enlargement").is_dir()
+        and (path / "stain_brightness").is_dir()
+    )
+
+
+def resolve_counterfactual_root(
+    explicit: Path | None,
+    search_roots: list[Path],
+    unpack_root: Path,
+) -> Path:
+    if explicit is not None:
+        explicit = explicit.expanduser().resolve()
+        root = locate_counterfactual_root(explicit)
+        if root is not None:
+            print(f"[reuse] extracted counterfactual root: {root}", flush=True)
+            return root
+        if explicit.is_file() and explicit.suffix.lower() == ".zip":
+            extract_archives([explicit], unpack_root)
+            root = locate_counterfactual_root(unpack_root)
+            if root is not None:
+                return root
+        raise FileNotFoundError(f"Invalid --counterfactual-source: {explicit}")
+
+    for search_root in search_roots:
+        direct = search_root / "CPathOGen_Counterfactuals"
+        root = locate_counterfactual_root(direct)
+        if root is not None:
+            print(f"[reuse] extracted counterfactual root: {root}", flush=True)
+            return root
+
+    extraction_complete = unpack_root / ".extraction_complete"
+    if extraction_complete.is_file():
+        root = locate_counterfactual_root(unpack_root)
+        if root is not None:
+            print(f"[reuse] staged counterfactual root: {root}", flush=True)
+            return root
+    if unpack_root.exists():
+        shutil.rmtree(unpack_root)
+
+    archives: list[Path] = []
+    for search_root in search_roots:
+        archives.extend(search_root.rglob("CPathOGen_Counterfactuals*.zip"))
+    archives = unique_paths(sorted(archives))
+    if not archives:
+        raise FileNotFoundError(
+            "Could not find an extracted CPathOGen_Counterfactuals directory "
+            "or CPathOGen_Counterfactuals*.zip archive."
+        )
+    extract_archives(archives, unpack_root)
+    extraction_complete.write_text("complete\n", encoding="utf-8")
+    root = locate_counterfactual_root(unpack_root)
+    if root is None:
+        raise FileNotFoundError("Could not locate the consolidated counterfactual folder")
+    return root
 
 
 def locate_dataset_root(search_root: Path) -> Path | None:
@@ -175,54 +248,37 @@ def main() -> None:
     output.mkdir(parents=True, exist_ok=True)
     search_roots = unique_paths([cvpr, mydrive])
 
-    dataset_unpack = work / "dataset_unpack"
-    dataset_complete = dataset_unpack / ".extraction_complete"
-    dataset_root = (
-        locate_dataset_root(dataset_unpack) if dataset_complete.is_file() else None
-    )
-    if dataset_root is None:
-        if dataset_unpack.exists():
-            shutil.rmtree(dataset_unpack)
-        dataset_archives = []
-        exact = cvpr / "512_final_dataset.zip"
-        if exact.is_file():
-            dataset_archives = [exact]
-        else:
-            for root in search_roots:
-                dataset_archives.extend(root.rglob("512_final_dataset.zip"))
-        dataset_archives = unique_paths(dataset_archives)
-        if not dataset_archives:
-            raise FileNotFoundError("Could not find 512_final_dataset.zip")
-        extract_archives([dataset_archives[0]], dataset_unpack)
-        dataset_complete.write_text("complete\n", encoding="utf-8")
-        dataset_root = locate_dataset_root(dataset_unpack)
-    if dataset_root is None:
-        raise FileNotFoundError("Could not locate the extracted 512_final_dataset")
+    dataset_root: Path | None = None
+    if not args.skip_dataset:
+        dataset_unpack = work / "dataset_unpack"
+        dataset_complete = dataset_unpack / ".extraction_complete"
+        dataset_root = (
+            locate_dataset_root(dataset_unpack) if dataset_complete.is_file() else None
+        )
+        if dataset_root is None:
+            if dataset_unpack.exists():
+                shutil.rmtree(dataset_unpack)
+            dataset_archives = []
+            exact = cvpr / "512_final_dataset.zip"
+            if exact.is_file():
+                dataset_archives = [exact]
+            else:
+                for root in search_roots:
+                    dataset_archives.extend(root.rglob("512_final_dataset.zip"))
+            dataset_archives = unique_paths(dataset_archives)
+            if not dataset_archives:
+                raise FileNotFoundError("Could not find 512_final_dataset.zip")
+            extract_archives([dataset_archives[0]], dataset_unpack)
+            dataset_complete.write_text("complete\n", encoding="utf-8")
+            dataset_root = locate_dataset_root(dataset_unpack)
+        if dataset_root is None:
+            raise FileNotFoundError("Could not locate the extracted 512_final_dataset")
 
-    counterfactual_unpack = work / "counterfactual_unpack"
-    counterfactual_complete = counterfactual_unpack / ".extraction_complete"
-    counterfactual_root = (
-        locate_counterfactual_root(counterfactual_unpack)
-        if counterfactual_complete.is_file()
-        else None
+    counterfactual_root = resolve_counterfactual_root(
+        args.counterfactual_source,
+        search_roots,
+        work / "counterfactual_unpack",
     )
-    if counterfactual_root is None:
-        if counterfactual_unpack.exists():
-            shutil.rmtree(counterfactual_unpack)
-        archives: list[Path] = []
-        for root in search_roots:
-            archives.extend(root.rglob("CPathOGen_Counterfactuals*.zip"))
-        archives = unique_paths(sorted(archives))
-        if len(archives) != 7:
-            raise RuntimeError(
-                f"Expected seven CPathOGen_Counterfactuals ZIP files, found {len(archives)}: "
-                f"{[str(path) for path in archives]}"
-            )
-        extract_archives(archives, counterfactual_unpack)
-        counterfactual_complete.write_text("complete\n", encoding="utf-8")
-        counterfactual_root = locate_counterfactual_root(counterfactual_unpack)
-    if counterfactual_root is None:
-        raise FileNotFoundError("Could not locate the consolidated counterfactual folder")
 
     endpoint_source = locate_endpoint_source(
         args.endpoint_source,
@@ -233,8 +289,8 @@ def main() -> None:
     copy_endpoint_once(endpoint_source, endpoint_root)
 
     paths = {
-        "dataset_root": str(dataset_root),
-        "real_images_dir": str(dataset_root / "images"),
+        "dataset_root": str(dataset_root) if dataset_root is not None else None,
+        "real_images_dir": str(dataset_root / "images") if dataset_root else None,
         "counterfactual_root": str(counterfactual_root),
         "endpoint_root": str(endpoint_root),
         "results_root": str(output / "results"),

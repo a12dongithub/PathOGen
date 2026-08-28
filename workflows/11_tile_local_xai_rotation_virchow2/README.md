@@ -1,64 +1,45 @@
-# A100 rotation and Virchow2 extension
+# Rotation nuisance and Virchow2 extension
 
-This workflow produces the final counterfactual-probing table under the corrected
-protocol:
+Run the workflow in two stages. Stage 1 reports rotation for ResNet-50,
+CTransPath, UNI2-h, and PathLUPI+CONCH without extracting the real-image
+dataset. Stage 2 adds Virchow2 and emits the complete table.
 
-- PAM50 counterfactual response is scored directly on one generated tile.
-- Survival uses a fixed 16-tile bag: one generated tile and 15 unchanged real
-  context tiles from the same patient.
-- Rotation compares the unrotated generated tile with exact 90, 180, and 270
-  degree views.
-- BNR is the mean response to the four biological experiments divided by the
-  mean response to stain brightness and rotation, with equal experiment weight.
+The counterfactuals are read from the already-extracted directory
+`MyDrive/PTRI/CVPR/CPathOGen_Counterfactuals`. Both stages save resumable
+artifacts under `MyDrive/PTRI/CVPR/CPathOGen_A100_Rotation_Virchow2`.
 
-The Drive output contains the resumable embedding caches and compact result
-artifacts, but no duplicated real or counterfactual image folders.
+Add a Colab secret named `HF_TOKEN` and enable notebook access to it.
 
-## Required Drive inputs
+## Stage 1: rotation for all models except Virchow2
 
-The staging script searches both `/content/drive/MyDrive/PTRI/CVPR` and all of
-`/content/drive/MyDrive` for:
-
-- `512_final_dataset.zip`;
-- exactly seven `CPathOGen_Counterfactuals*.zip` archives;
-- either an extracted `endpoint_models` directory or `PathOGenResults*.zip`.
-
-Add a Colab secret named `HF_TOKEN`, grant the notebook access to it, and select
-an A100 runtime. The Hugging Face account must have access to UNI2-h, CONCH, and
-Virchow2.
-
-## Single Colab cell
+This stage does not locate or extract `512_final_dataset.zip`.
 
 ```python
 from google.colab import drive, userdata
 from pathlib import Path
 import json
 import os
-import shutil
 import torch
 
 drive.mount("/content/drive")
-
 token = userdata.get("HF_TOKEN")
 if not token:
     raise RuntimeError("Add HF_TOKEN in Colab Secrets and grant notebook access.")
 os.environ["HF_TOKEN"] = token
-
 if not torch.cuda.is_available():
     raise RuntimeError("Enable a GPU runtime before running this cell.")
-gpu_name = torch.cuda.get_device_name(0)
-print("GPU:", gpu_name)
-if "A100" not in gpu_name:
-    raise RuntimeError(f"This workflow is sized for an A100, but found {gpu_name}.")
+print("GPU:", torch.cuda.get_device_name(0))
 
 REPO = Path("/content/PathOGen")
 BRANCH = "codex/inflammatory-mass-generation"
 MYDRIVE = Path("/content/drive/MyDrive")
 CVPR_ROOT = MYDRIVE / "PTRI" / "CVPR"
-WORK_ROOT = Path("/content/cpathogen_a100")
+CF_SOURCE = CVPR_ROOT / "CPathOGen_Counterfactuals"
+WORK_ROOT = Path("/content/cpathogen_rotation")
 OUTPUT_ROOT = CVPR_ROOT / "CPathOGen_A100_Rotation_Virchow2"
-WF = REPO / "workflows" / "11_tile_local_xai_rotation_virchow2"
 
+if not (CF_SOURCE / "organized_bucket_images.csv").is_file():
+    raise FileNotFoundError(f"Counterfactual folder is invalid: {CF_SOURCE}")
 if not (REPO / ".git").is_dir():
     !git clone --branch {BRANCH} --single-branch https://github.com/a12dongithub/PathOGen.git {REPO}
 else:
@@ -71,6 +52,7 @@ else:
 
 from huggingface_hub import snapshot_download
 
+WF = REPO / "workflows" / "11_tile_local_xai_rotation_virchow2"
 PATHLUPI_ROOT = Path("/content/external/PathLUPI")
 if not (PATHLUPI_ROOT / ".git").is_dir():
     !git clone https://github.com/ChengJin-git/PathLUPI.git {PATHLUPI_ROOT}
@@ -79,33 +61,33 @@ if not (PATHLUPI_ROOT / ".git").is_dir():
     --mydrive-root "{MYDRIVE}" \
     --cvpr-root "{CVPR_ROOT}" \
     --work-root "{WORK_ROOT}" \
-    --output-root "{OUTPUT_ROOT}"
+    --output-root "{OUTPUT_ROOT}" \
+    --counterfactual-source "{CF_SOURCE}" \
+    --skip-dataset
 
 paths = json.loads((OUTPUT_ROOT / "resolved_paths.json").read_text())
-DATASET_ROOT = Path(paths["dataset_root"])
-REAL_IMAGES = Path(paths["real_images_dir"])
 COUNTERFACTUAL_ROOT = Path(paths["counterfactual_root"])
 ENDPOINT_ROOT = Path(paths["endpoint_root"])
 RESULTS_ROOT = Path(paths["results_root"])
 RESULTS_ROOT.mkdir(parents=True, exist_ok=True)
+ROTATION_DIR = WORK_ROOT / "rotation_manifest"
 
-ROTATION_DIR = COUNTERFACTUAL_ROOT / "image_rotation"
 !python "{REPO / 'workflows/10_train_evaluate_endpoint_models/prepare_rotation_nuisance.py'}" \
     --counterfactual-root "{COUNTERFACTUAL_ROOT}" \
     --tile-manifest "{ENDPOINT_ROOT / 'tile_manifest.csv'}" \
     --output-dir "{ROTATION_DIR}" \
+    --local-image-cache-dir "{WORK_ROOT / 'rotation_sources'}" \
     --num-images 1000 \
     --seed 42
 
 !python "{REPO / 'workflows/10_train_evaluate_endpoint_models/extract_rotation_virchow2_embeddings.py'}" \
     --endpoint-root "{ENDPOINT_ROOT}" \
     --counterfactual-root "{COUNTERFACTUAL_ROOT}" \
-    --real-images-dir "{REAL_IMAGES}" \
+    --real-images-dir "/content/unused" \
     --rotation-manifest "{ROTATION_DIR / 'images.csv'}" \
-    --models resnet50 ctranspath uni2h virchow2 conch \
-    --full-models virchow2 \
+    --models resnet50 ctranspath uni2h conch \
+    --full-models none \
     --batch-size 64 \
-    --virchow-batch-size 32 \
     --num-workers 8 \
     --shard-size 2048 \
     --device cuda
@@ -114,19 +96,17 @@ ROTATION_DIR = COUNTERFACTUAL_ROOT / "image_rotation"
     --endpoint-root "{ENDPOINT_ROOT}" \
     --counterfactual-root "{COUNTERFACTUAL_ROOT}" \
     --output-root "{RESULTS_ROOT}" \
-    --models resnet50 ctranspath uni2h virchow2 \
+    --models resnet50 ctranspath uni2h \
     --bag-sizes 16 \
     --primary-bag-size 16 \
     --seed 42
 
-PATHLUPI_CHECKPOINTS = Path(
-    snapshot_download(
-        repo_id="peterjin0703/PathLUPI",
-        allow_patterns=["survival/BRCA/*"],
-        local_dir="/content/pathlupi_checkpoints",
-        token=token,
-    )
-)
+PATHLUPI_CHECKPOINTS = Path(snapshot_download(
+    repo_id="peterjin0703/PathLUPI",
+    allow_patterns=["survival/BRCA/*"],
+    local_dir="/content/pathlupi_checkpoints",
+    token=token,
+))
 
 !python "{WF / 'run_pathlupi_fixedbag.py'}" \
     --endpoint-root "{ENDPOINT_ROOT}" \
@@ -143,9 +123,8 @@ PATHLUPI_CHECKPOINTS = Path(
 !python "{WF / 'score_rotation_extension.py'}" \
     --endpoint-root "{ENDPOINT_ROOT}" \
     --base-results-root "{RESULTS_ROOT}" \
-    --virchow-results-root "{RESULTS_ROOT}" \
     --output-root "{RESULTS_ROOT}" \
-    --models resnet50 ctranspath uni2h virchow2 \
+    --models resnet50 ctranspath uni2h \
     --bag-size 16 \
     --seed 42
 
@@ -158,24 +137,132 @@ PATHLUPI_CHECKPOINTS = Path(
     --seed 42 \
     --device cuda
 
+!python "{WF / 'merge_rotation_results.py'}" \
+    --base-results-root "{RESULTS_ROOT}" \
+    --rotation-summary "{RESULTS_ROOT / 'rotation_experiment_summary.csv'}" \
+    --pathlupi-rotation-summary "{RESULTS_ROOT / 'pathlupi_rotation_summary.csv'}" \
+    --output-root "{RESULTS_ROOT}" \
+    --models resnet50 ctranspath uni2h pathlupi_conch \
+    --primary-bag-size 16
+
+FINAL = RESULTS_ROOT / "table4_rotation_without_virchow.md"
+print("\nSaved:", FINAL)
+print(FINAL.read_text())
+```
+
+## Stage 2: Virchow2 only, then final merge
+
+Run this after Stage 1. It extracts the real-image dataset because Virchow2
+does not yet have a real-tile cache. It also copies the counterfactual folder to
+ephemeral Colab storage to avoid repeated small-file reads from Drive.
+
+```python
+from google.colab import drive, userdata
+from pathlib import Path
+import json
+import os
+import shutil
+import torch
+
+drive.mount("/content/drive")
+token = userdata.get("HF_TOKEN")
+if not token:
+    raise RuntimeError("Add HF_TOKEN in Colab Secrets and grant notebook access.")
+os.environ["HF_TOKEN"] = token
+if not torch.cuda.is_available():
+    raise RuntimeError("Enable an A100 GPU runtime before running this cell.")
+print("GPU:", torch.cuda.get_device_name(0))
+
+REPO = Path("/content/PathOGen")
+BRANCH = "codex/inflammatory-mass-generation"
+MYDRIVE = Path("/content/drive/MyDrive")
+CVPR_ROOT = MYDRIVE / "PTRI" / "CVPR"
+CF_SOURCE = CVPR_ROOT / "CPathOGen_Counterfactuals"
+WORK_ROOT = Path("/content/cpathogen_virchow2")
+OUTPUT_ROOT = CVPR_ROOT / "CPathOGen_A100_Rotation_Virchow2"
+
+if not (REPO / ".git").is_dir():
+    !git clone --branch {BRANCH} --single-branch https://github.com/a12dongithub/PathOGen.git {REPO}
+else:
+    !git -C {REPO} fetch origin {BRANCH}
+    !git -C {REPO} checkout {BRANCH}
+    !git -C {REPO} pull --ff-only origin {BRANCH}
+
+!pip install -q -e "{REPO}[endpoints]" hf_xet
+
+WF = REPO / "workflows" / "11_tile_local_xai_rotation_virchow2"
+!python "{WF / 'prepare_colab_inputs.py'}" \
+    --mydrive-root "{MYDRIVE}" \
+    --cvpr-root "{CVPR_ROOT}" \
+    --work-root "{WORK_ROOT}" \
+    --output-root "{OUTPUT_ROOT}" \
+    --counterfactual-source "{CF_SOURCE}"
+
+paths = json.loads((OUTPUT_ROOT / "resolved_paths.json").read_text())
+REAL_IMAGES = Path(paths["real_images_dir"])
+ENDPOINT_ROOT = Path(paths["endpoint_root"])
+RESULTS_ROOT = Path(paths["results_root"])
+VIRCH_RESULTS = OUTPUT_ROOT / "results_virchow2"
+VIRCH_RESULTS.mkdir(parents=True, exist_ok=True)
+
+LOCAL_CF = WORK_ROOT / "CPathOGen_Counterfactuals"
+LOCAL_CF_MARKER = LOCAL_CF / ".copy_complete"
+if not LOCAL_CF_MARKER.is_file():
+    if LOCAL_CF.exists():
+        shutil.rmtree(LOCAL_CF)
+    print("Copying counterfactual PNGs from Drive to local Colab storage...")
+    shutil.copytree(CF_SOURCE, LOCAL_CF)
+    LOCAL_CF_MARKER.write_text("complete\n")
+
+ROTATION_DIR = WORK_ROOT / "rotation_manifest"
+!python "{REPO / 'workflows/10_train_evaluate_endpoint_models/prepare_rotation_nuisance.py'}" \
+    --counterfactual-root "{LOCAL_CF}" \
+    --tile-manifest "{ENDPOINT_ROOT / 'tile_manifest.csv'}" \
+    --output-dir "{ROTATION_DIR}" \
+    --num-images 1000 \
+    --seed 42
+
+!python "{REPO / 'workflows/10_train_evaluate_endpoint_models/extract_rotation_virchow2_embeddings.py'}" \
+    --endpoint-root "{ENDPOINT_ROOT}" \
+    --counterfactual-root "{LOCAL_CF}" \
+    --real-images-dir "{REAL_IMAGES}" \
+    --rotation-manifest "{ROTATION_DIR / 'images.csv'}" \
+    --models virchow2 \
+    --full-models virchow2 \
+    --virchow-batch-size 32 \
+    --num-workers 8 \
+    --shard-size 2048 \
+    --device cuda
+
+!python "{WF / 'run_local_xai_rerun.py'}" \
+    --endpoint-root "{ENDPOINT_ROOT}" \
+    --counterfactual-root "{LOCAL_CF}" \
+    --output-root "{VIRCH_RESULTS}" \
+    --models virchow2 \
+    --bag-sizes 16 \
+    --primary-bag-size 16 \
+    --seed 42
+
+!python "{WF / 'score_rotation_extension.py'}" \
+    --endpoint-root "{ENDPOINT_ROOT}" \
+    --base-results-root "{RESULTS_ROOT}" \
+    --virchow-results-root "{VIRCH_RESULTS}" \
+    --output-root "{VIRCH_RESULTS}" \
+    --models virchow2 \
+    --bag-size 16 \
+    --seed 42
+
 !python "{WF / 'merge_rotation_virchow2.py'}" \
     --base-results-root "{RESULTS_ROOT}" \
-    --virchow-results-root "{RESULTS_ROOT}" \
-    --rotation-summary "{RESULTS_ROOT / 'rotation_experiment_summary.csv'}" \
+    --virchow-results-root "{VIRCH_RESULTS}" \
+    --rotation-summary \
+        "{RESULTS_ROOT / 'rotation_experiment_summary.csv'}" \
+        "{VIRCH_RESULTS / 'rotation_experiment_summary.csv'}" \
     --pathlupi-rotation-summary "{RESULTS_ROOT / 'pathlupi_rotation_summary.csv'}" \
     --output-root "{RESULTS_ROOT}" \
     --primary-bag-size 16
 
-# Shards are resumable temporary files; final NPZ caches are retained in Drive.
-shutil.rmtree(ENDPOINT_ROOT / "embedding_cache" / "shards", ignore_errors=True)
-
-FINAL_MD = RESULTS_ROOT / "table4_rotation_virchow2.md"
-FINAL_CSV = RESULTS_ROOT / "table4_rotation_virchow2.csv"
-print("\nFinal Markdown table:", FINAL_MD)
-print("Final CSV table:", FINAL_CSV)
-print(FINAL_MD.read_text())
+FINAL = RESULTS_ROOT / "table4_rotation_virchow2.md"
+print("\nSaved:", FINAL)
+print(FINAL.read_text())
 ```
-
-The final table is saved under
-`MyDrive/PTRI/CVPR/CPathOGen_A100_Rotation_Virchow2/results/`. Re-running the
-cell reuses complete embedding caches and resumable shards.

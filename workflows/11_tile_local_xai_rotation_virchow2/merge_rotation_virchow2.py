@@ -16,7 +16,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base-results-root", type=Path, required=True)
     parser.add_argument("--virchow-results-root", type=Path, required=True)
-    parser.add_argument("--rotation-summary", type=Path, required=True)
+    parser.add_argument("--rotation-summary", type=Path, nargs="+", required=True)
     parser.add_argument("--pathlupi-rotation-summary", type=Path, required=True)
     parser.add_argument("--output-root", type=Path, required=True)
     parser.add_argument("--primary-bag-size", type=int, default=16)
@@ -34,7 +34,7 @@ def main() -> None:
         [
             pd.read_csv(base / "experiment_summary_with_pathlupi.csv"),
             pd.read_csv(virchow / "experiment_summary.csv"),
-            pd.read_csv(args.rotation_summary),
+            *(pd.read_csv(path) for path in args.rotation_summary),
             pd.read_csv(args.pathlupi_rotation_summary),
         ],
         ignore_index=True,
@@ -75,5 +75,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
 

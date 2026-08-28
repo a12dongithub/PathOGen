@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import shutil
 from pathlib import Path
 
 import pandas as pd
@@ -29,6 +30,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--counterfactual-root", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--tile-manifest", type=Path, required=True)
+    parser.add_argument(
+        "--local-image-cache-dir",
+        type=Path,
+        help="Optionally copy each selected source image here once for faster I/O.",
+    )
     parser.add_argument("--num-images", type=int, default=1000)
     parser.add_argument("--seed", type=int, default=42)
     return parser.parse_args()
@@ -67,6 +73,13 @@ def main() -> None:
             f"requested {args.num_images}"
         )
     selected = candidates.head(args.num_images)
+    local_cache = (
+        args.local_image_cache_dir.expanduser().resolve()
+        if args.local_image_cache_dir
+        else None
+    )
+    if local_cache is not None:
+        local_cache.mkdir(parents=True, exist_ok=True)
     rows = []
     for source in selected.itertuples(index=False):
         stem = str(source.stem_resolved)
@@ -75,6 +88,11 @@ def main() -> None:
         image = root / source_experiment / stem / f"{source_condition}.png"
         if not image.is_file():
             raise FileNotFoundError(image)
+        if local_cache is not None:
+            cached_image = local_cache / f"{stem}.png"
+            if not cached_image.is_file() or cached_image.stat().st_size != image.stat().st_size:
+                shutil.copy2(image, cached_image)
+            image = cached_image
         for condition, augmentation_code in ROTATIONS:
             rows.append(
                 {
