@@ -24,6 +24,10 @@ REQUIRED_CACHES = (
     "conch_pretrained_bags.npz",
     "conch_counterfactuals_pretrained.npz",
 )
+REQUIRED_FOLD_FILES = (
+    "pam50_patient_oof_predictions.csv",
+    "survival_patient_oof_predictions.csv",
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -75,8 +79,15 @@ def locate_dataset_root(search_root: Path) -> Path | None:
 
 
 def valid_endpoint_root(path: Path) -> bool:
-    return all((path / name).is_file() for name in REQUIRED_ENDPOINT_FILES) and all(
-        (path / "embedding_cache" / name).is_file() for name in REQUIRED_CACHES
+    return (
+        all((path / name).is_file() for name in REQUIRED_ENDPOINT_FILES)
+        and all(
+            (path / "embedding_cache" / name).is_file() for name in REQUIRED_CACHES
+        )
+        and all(
+            (path / "models" / "resnet50" / name).is_file()
+            for name in REQUIRED_FOLD_FILES
+        )
     )
 
 
@@ -136,7 +147,20 @@ def copy_endpoint_once(source: Path, destination: Path) -> None:
         return
     destination.parent.mkdir(parents=True, exist_ok=True)
     print(f"[copy] endpoint artifacts: {source} -> {destination}", flush=True)
-    shutil.copytree(source, destination, dirs_exist_ok=True)
+    destination.mkdir(parents=True, exist_ok=True)
+    cache_destination = destination / "embedding_cache"
+    fold_destination = destination / "models" / "resnet50"
+    cache_destination.mkdir(parents=True, exist_ok=True)
+    fold_destination.mkdir(parents=True, exist_ok=True)
+    for name in REQUIRED_ENDPOINT_FILES:
+        shutil.copy2(source / name, destination / name)
+    for name in REQUIRED_CACHES:
+        shutil.copy2(source / "embedding_cache" / name, cache_destination / name)
+    for name in REQUIRED_FOLD_FILES:
+        shutil.copy2(
+            source / "models" / "resnet50" / name,
+            fold_destination / name,
+        )
     if not valid_endpoint_root(destination):
         raise RuntimeError("Copied endpoint root failed validation")
 

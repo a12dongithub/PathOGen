@@ -49,6 +49,11 @@ def test_prepare_colab_inputs_discovers_and_stages(tmp_path: Path, monkeypatch) 
         (endpoint / name).write_text("fixture", encoding="utf-8")
     for name in module.REQUIRED_CACHES:
         (endpoint / "embedding_cache" / name).write_bytes(b"fixture")
+    (endpoint / "models" / "resnet50").mkdir(parents=True)
+    for name in module.REQUIRED_FOLD_FILES:
+        (endpoint / "models" / "resnet50" / name).write_text(
+            "fixture", encoding="utf-8"
+        )
 
     work = tmp_path / "work"
     output = cvpr / "output"
